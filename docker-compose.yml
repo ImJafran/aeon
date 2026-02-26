@@ -1,0 +1,46 @@
+services:
+  dev:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app
+      - go-cache:/root/.cache/go-build
+      - go-mod:/go/pkg/mod
+    working_dir: /app
+    command: ["make", "run"]
+    tty: true
+    stdin_open: true
+    environment:
+      - CGO_ENABLED=0
+      - AEON_HOME=/tmp/aeon-dev
+
+  test:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app
+      - go-cache:/root/.cache/go-build
+      - go-mod:/go/pkg/mod
+    working_dir: /app
+    command: ["make", "test"]
+    environment:
+      - CGO_ENABLED=0
+
+  build:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app
+      - go-cache:/root/.cache/go-build
+      - go-mod:/go/pkg/mod
+    working_dir: /app
+    command: ["make", "build"]
+    environment:
+      - CGO_ENABLED=0
+
+volumes:
+  go-cache:
+  go-mod:

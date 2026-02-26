@@ -1,2 +1,17 @@
 ref
 analysis-gemini.md
+
+# Build
+bin/
+*.exe
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Aeon runtime
+.aeon/
