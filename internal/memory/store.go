@@ -261,6 +261,11 @@ func (s *Store) ClearHistory(_ context.Context, sessionID string) error {
 	return err
 }
 
+// DB returns the underlying database connection for shared use.
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()

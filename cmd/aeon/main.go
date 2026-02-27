@@ -17,6 +17,7 @@ import (
 	"github.com/jafran/aeon/internal/config"
 	"github.com/jafran/aeon/internal/memory"
 	"github.com/jafran/aeon/internal/providers"
+	"github.com/jafran/aeon/internal/scheduler"
 	"github.com/jafran/aeon/internal/security"
 	"github.com/jafran/aeon/internal/skills"
 	"github.com/jafran/aeon/internal/tools"
@@ -193,6 +194,22 @@ func runInteractive() {
 	registry.Register(tools.NewFindSkills(skillLoader))
 	registry.Register(tools.NewReadSkill(skillLoader))
 	registry.Register(tools.NewRunSkill(skillLoader))
+
+	// Initialize scheduler (shares the same SQLite database)
+	sched, err := scheduler.New(memStore.DB(), logger)
+	if err != nil {
+		logger.Warn("failed to initialize scheduler", "error", err)
+	} else {
+		sched.OnTrigger(func(job scheduler.Job) {
+			// Fire cron job as a system message through the bus
+			msgBus.Publish(bus.InboundMessage{
+				Channel: "system",
+				Content: fmt.Sprintf("[cron:%s] %s", job.Name, job.Command),
+			})
+		})
+		sched.Start(ctx)
+		registry.Register(tools.NewCronManage(sched))
+	}
 	logger.Info("tools registered", "count", registry.Count())
 
 	// Initialize provider chain
@@ -208,11 +225,16 @@ func runInteractive() {
 	// Print banner
 	providerCount := config.EnabledProviderCount(cfg)
 	skillCount := skillLoader.Count()
+	cronCount := 0
+	if sched != nil {
+		cronCount, _ = sched.Count()
+	}
 	fmt.Printf("\n🌱 Aeon v%s — The Self-Evolving Kernel\n", version)
 	fmt.Printf("   Providers: %d configured\n", providerCount)
 	fmt.Printf("   Tools: %d loaded\n", registry.Count())
 	fmt.Printf("   Skills: %d loaded\n", skillCount)
 	fmt.Printf("   Memory: %d entries\n", memCount)
+	fmt.Printf("   Cron: %d jobs\n", cronCount)
 	fmt.Printf("   Home: %s\n\n", home)
 
 	// Start CLI channel
