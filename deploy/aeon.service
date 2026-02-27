@@ -1,0 +1,36 @@
+[Unit]
+Description=Aeon - Self-Evolving Agentic Kernel
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aeon
+Group=aeon
+WorkingDirectory=/home/aeon
+ExecStart=/usr/local/bin/aeon serve
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Environment
+Environment=AEON_HOME=/home/aeon/.aeon
+# Uncomment and set your provider API key:
+# Environment=ANTHROPIC_API_KEY=your-key-here
+# Environment=GEMINI_API_KEY=your-key-here
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/aeon/.aeon
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aeon
+
+[Install]
+WantedBy=multi-user.target

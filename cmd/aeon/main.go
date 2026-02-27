@@ -147,9 +147,10 @@ func runInteractive() {
 		cancel()
 	}()
 
-	// Setup logging
+	// Setup logging (configurable level from config)
+	logLevel := parseLogLevel(cfg.Log.Level)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logLevel,
 	}))
 
 	// Initialize message bus
@@ -380,4 +381,17 @@ func printUsage() {
 	fmt.Println("  aeon init         First-time setup wizard")
 	fmt.Println("  aeon version      Show version")
 	fmt.Println("  aeon help         Show this help")
+}
+
+func parseLogLevel(level string) slog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
