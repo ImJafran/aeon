@@ -1,13 +1,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"github.com/jafran/aeon/internal/agent"
 	"github.com/jafran/aeon/internal/bootstrap"
+	"github.com/jafran/aeon/internal/bus"
+	"github.com/jafran/aeon/internal/channels"
 	"github.com/jafran/aeon/internal/config"
+	"github.com/jafran/aeon/internal/tools"
 )
 
 var version = "0.1.0"
@@ -139,8 +147,48 @@ func runInteractive() {
 	fmt.Printf("   Skills: %d loaded\n", skillCount)
 	fmt.Printf("   Home: %s\n\n", home)
 
-	// TODO: Wire up bus + channels + agent loop (Phase 1)
-	fmt.Println("Interactive mode not yet implemented. Coming in Phase 1.")
+	// Setup context with signal handling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Println("\nShutting down...")
+		cancel()
+	}()
+
+	// Setup logging
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	// Initialize message bus
+	msgBus := bus.New(64)
+
+	// Initialize tool registry (empty for now, tools added in Phase 3)
+	registry := tools.NewRegistry()
+
+	// Initialize agent loop (no provider yet — echo mode)
+	// Provider will be wired in Phase 2
+	loop := agent.NewAgentLoop(msgBus, nil, registry, logger)
+
+	// Start CLI channel
+	cli := channels.NewCLI()
+	if err := cli.Start(ctx, msgBus); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting CLI channel: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Run agent loop (blocks until context cancelled)
+	loop.Run(ctx)
+
+	// Cleanup
+	cli.Stop()
+	msgBus.Close()
+
+	_ = cfg // will be used for provider setup in Phase 2
 }
 
 func runServe() {
