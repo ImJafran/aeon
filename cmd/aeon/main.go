@@ -244,19 +244,125 @@ func runInteractive() {
 		os.Exit(1)
 	}
 
+	// Start Telegram channel if configured
+	var tg *channels.TelegramChannel
+	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.Enabled && cfg.Channels.Telegram.BotToken != "" {
+		tg = channels.NewTelegram(cfg.Channels.Telegram.BotToken, cfg.Channels.Telegram.AllowedUsers, logger)
+		if err := tg.Start(ctx, msgBus); err != nil {
+			logger.Error("failed to start telegram channel", "error", err)
+		} else {
+			logger.Info("telegram channel started")
+		}
+	}
+
 	// Run agent loop (blocks until context cancelled)
 	loop.Run(ctx)
 
 	// Cleanup
 	cli.Stop()
+	if tg != nil {
+		tg.Stop()
+	}
 	msgBus.Close()
-
-	_ = cfg // will be used for provider setup in Phase 2
 }
 
 func runServe() {
-	fmt.Printf("🌱 Aeon v%s — Daemon Mode\n", version)
-	fmt.Println("Daemon mode not yet implemented. Coming in Phase 8.")
+	cfgPath := config.DefaultConfigPath()
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		fmt.Println("No config found. Run 'aeon init' first.")
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	if cfg.Channels.Telegram == nil || !cfg.Channels.Telegram.Enabled || cfg.Channels.Telegram.BotToken == "" {
+		fmt.Println("Telegram not configured. Add telegram settings to config.yaml and run 'aeon serve'.")
+		os.Exit(1)
+	}
+
+	home := config.AeonHome()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Println("\nShutting down...")
+		cancel()
+	}()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	msgBus := bus.New(64)
+
+	secPolicy := security.NewPolicy(cfg.Security.DenyPatterns, cfg.Security.AllowedPaths)
+	secAdapter := security.NewAdapter(secPolicy)
+
+	dbPath := filepath.Join(home, "aeon.db")
+	memStore, err := memory.NewStore(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
+		os.Exit(1)
+	}
+	defer memStore.Close()
+
+	registry := tools.NewRegistry()
+	shellExec := tools.RegisterDNATools(registry)
+	shellExec.SetSecurity(secAdapter)
+	registry.Register(tools.NewMemoryStore(memStore))
+	registry.Register(tools.NewMemoryRecall(memStore))
+
+	skillsDir := filepath.Join(home, "skills")
+	venvPath := filepath.Join(home, "base_venv")
+	skillLoader := skills.NewLoader(skillsDir, venvPath)
+	skillLoader.LoadAll()
+	registry.Register(tools.NewSkillFactory(skillLoader))
+	registry.Register(tools.NewFindSkills(skillLoader))
+	registry.Register(tools.NewReadSkill(skillLoader))
+	registry.Register(tools.NewRunSkill(skillLoader))
+
+	sched, err := scheduler.New(memStore.DB(), logger)
+	if err == nil {
+		sched.OnTrigger(func(job scheduler.Job) {
+			msgBus.Publish(bus.InboundMessage{
+				Channel: "system",
+				Content: fmt.Sprintf("[cron:%s] %s", job.Name, job.Command),
+			})
+		})
+		sched.Start(ctx)
+		registry.Register(tools.NewCronManage(sched))
+	}
+
+	provider, err := providers.FromConfig(cfg, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: no provider available: %v\n", err)
+		os.Exit(1)
+	}
+
+	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
+	loop.SetScrubber(secAdapter)
+
+	tg := channels.NewTelegram(cfg.Channels.Telegram.BotToken, cfg.Channels.Telegram.AllowedUsers, logger)
+	if err := tg.Start(ctx, msgBus); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting Telegram: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("🌱 Aeon v%s — Daemon Mode (Telegram)\n", version)
+	fmt.Printf("   Tools: %d | Skills: %d | Listening...\n\n", registry.Count(), skillLoader.Count())
+
+	loop.Run(ctx)
+
+	tg.Stop()
+	msgBus.Close()
 }
 
 func printUsage() {
