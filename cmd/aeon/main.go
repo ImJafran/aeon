@@ -15,6 +15,7 @@ import (
 	"github.com/jafran/aeon/internal/bus"
 	"github.com/jafran/aeon/internal/channels"
 	"github.com/jafran/aeon/internal/config"
+	"github.com/jafran/aeon/internal/providers"
 	"github.com/jafran/aeon/internal/tools"
 )
 
@@ -170,9 +171,14 @@ func runInteractive() {
 	// Initialize tool registry (empty for now, tools added in Phase 3)
 	registry := tools.NewRegistry()
 
-	// Initialize agent loop (no provider yet — echo mode)
-	// Provider will be wired in Phase 2
-	loop := agent.NewAgentLoop(msgBus, nil, registry, logger)
+	// Initialize provider chain
+	provider, err := providers.FromConfig(cfg, logger)
+	if err != nil {
+		logger.Warn("no provider available, running in echo mode", "error", err)
+	}
+
+	// Initialize agent loop
+	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
 
 	// Start CLI channel
 	cli := channels.NewCLI()
