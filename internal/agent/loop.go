@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/jafran/aeon/internal/bus"
 	"github.com/jafran/aeon/internal/providers"
@@ -145,19 +146,43 @@ func (a *AgentLoop) runAgentLoop(ctx context.Context, msg bus.InboundMessage) {
 func (a *AgentLoop) executeTools(ctx context.Context, calls []providers.ToolCall) []tools.ToolResult {
 	results := make([]tools.ToolResult, len(calls))
 
-	// Execute tools — for now sequential, parallel execution in Phase 3
-	for i, call := range calls {
-		result, err := a.registry.Execute(ctx, call.Name, []byte(call.Arguments))
+	if len(calls) == 1 {
+		// Single tool — no goroutine overhead
+		result, err := a.registry.Execute(ctx, calls[0].Name, []byte(calls[0].Arguments))
 		if err != nil {
-			results[i] = tools.ToolResult{
-				ToolCallID: call.ID,
-				ForLLM:     fmt.Sprintf("Error executing %s: %v", call.Name, err),
+			results[0] = tools.ToolResult{
+				ToolCallID: calls[0].ID,
+				ForLLM:     fmt.Sprintf("Error executing %s: %v", calls[0].Name, err),
 			}
-			continue
+		} else {
+			result.ToolCallID = calls[0].ID
+			results[0] = result
 		}
-		result.ToolCallID = call.ID
-		results[i] = result
+		return results
 	}
+
+	// Multiple tools — execute in parallel
+	var wg sync.WaitGroup
+	for i, call := range calls {
+		wg.Add(1)
+		go func(idx int, tc providers.ToolCall) {
+			defer wg.Done()
+			a.logger.Debug("executing tool", "name", tc.Name, "id", tc.ID)
+
+			result, err := a.registry.Execute(ctx, tc.Name, []byte(tc.Arguments))
+			if err != nil {
+				results[idx] = tools.ToolResult{
+					ToolCallID: tc.ID,
+					ForLLM:     fmt.Sprintf("Error executing %s: %v", tc.Name, err),
+				}
+				return
+			}
+			result.ToolCallID = tc.ID
+			results[idx] = result
+		}(i, call)
+	}
+	wg.Wait()
+
 	return results
 }
 

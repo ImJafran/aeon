@@ -168,8 +168,10 @@ func runInteractive() {
 	// Initialize message bus
 	msgBus := bus.New(64)
 
-	// Initialize tool registry (empty for now, tools added in Phase 3)
+	// Initialize tool registry with DNA tools
 	registry := tools.NewRegistry()
+	tools.RegisterDNATools(registry)
+	logger.Info("DNA tools registered", "count", registry.Count())
 
 	// Initialize provider chain
 	provider, err := providers.FromConfig(cfg, logger)
