@@ -18,6 +18,7 @@ import (
 	"github.com/jafran/aeon/internal/memory"
 	"github.com/jafran/aeon/internal/providers"
 	"github.com/jafran/aeon/internal/security"
+	"github.com/jafran/aeon/internal/skills"
 	"github.com/jafran/aeon/internal/tools"
 )
 
@@ -177,6 +178,21 @@ func runInteractive() {
 	// Register memory tools
 	registry.Register(tools.NewMemoryStore(memStore))
 	registry.Register(tools.NewMemoryRecall(memStore))
+
+	// Initialize skill system
+	skillsDir := filepath.Join(home, "skills")
+	venvPath := filepath.Join(home, "base_venv")
+	skillLoader := skills.NewLoader(skillsDir, venvPath)
+	if err := skillLoader.LoadAll(); err != nil {
+		logger.Warn("failed to load skills", "error", err)
+	}
+	logger.Info("skills loaded", "count", skillLoader.Count())
+
+	// Register skill tools
+	registry.Register(tools.NewSkillFactory(skillLoader))
+	registry.Register(tools.NewFindSkills(skillLoader))
+	registry.Register(tools.NewReadSkill(skillLoader))
+	registry.Register(tools.NewRunSkill(skillLoader))
 	logger.Info("tools registered", "count", registry.Count())
 
 	// Initialize provider chain
@@ -191,15 +207,7 @@ func runInteractive() {
 
 	// Print banner
 	providerCount := config.EnabledProviderCount(cfg)
-	skillCount := 0
-	skillsDir := filepath.Join(home, "skills")
-	if entries, err := os.ReadDir(skillsDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				skillCount++
-			}
-		}
-	}
+	skillCount := skillLoader.Count()
 	fmt.Printf("\n🌱 Aeon v%s — The Self-Evolving Kernel\n", version)
 	fmt.Printf("   Providers: %d configured\n", providerCount)
 	fmt.Printf("   Tools: %d loaded\n", registry.Count())
