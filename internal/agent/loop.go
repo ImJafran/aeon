@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/jafran/aeon/internal/bus"
+	"github.com/jafran/aeon/internal/memory"
 	"github.com/jafran/aeon/internal/providers"
 	"github.com/jafran/aeon/internal/tools"
 )
@@ -16,21 +18,28 @@ type CredentialScrubber interface {
 	ScrubCredentials(text string) string
 }
 
+// maxHistoryMessages is the maximum number of prior messages to load into context.
+const maxHistoryMessages = 20
+
 type AgentLoop struct {
-	bus      *bus.MessageBus
-	provider providers.Provider
-	registry *tools.Registry
-	scrubber CredentialScrubber
-	subMgr   *SubagentManager
-	logger   *slog.Logger
+	bus       *bus.MessageBus
+	provider  providers.Provider
+	registry  *tools.Registry
+	memStore  *memory.Store
+	scrubber  CredentialScrubber
+	subMgr    *SubagentManager
+	logger    *slog.Logger
+	sessionID string
+	history   []providers.Message // in-memory conversation history for current session
 }
 
 func NewAgentLoop(b *bus.MessageBus, provider providers.Provider, registry *tools.Registry, logger *slog.Logger) *AgentLoop {
 	return &AgentLoop{
-		bus:      b,
-		provider: provider,
-		registry: registry,
-		logger:   logger,
+		bus:       b,
+		provider:  provider,
+		registry:  registry,
+		logger:    logger,
+		sessionID: fmt.Sprintf("session_%d", time.Now().UnixNano()),
 	}
 }
 
@@ -42,8 +51,15 @@ func (a *AgentLoop) SetSubagentManager(m *SubagentManager) {
 	a.subMgr = m
 }
 
+func (a *AgentLoop) SetMemoryStore(m *memory.Store) {
+	a.memStore = m
+}
+
 func (a *AgentLoop) Run(ctx context.Context) {
-	a.logger.Info("agent loop started")
+	a.logger.Info("agent loop started", "session", a.sessionID)
+
+	// Load prior conversation history from database
+	a.loadHistory(ctx)
 
 	for {
 		select {
@@ -59,6 +75,30 @@ func (a *AgentLoop) Run(ctx context.Context) {
 	}
 }
 
+// loadHistory loads the last N messages from SQLite into memory.
+func (a *AgentLoop) loadHistory(ctx context.Context) {
+	if a.memStore == nil {
+		return
+	}
+
+	rows, err := a.memStore.GetHistory(ctx, a.sessionID, maxHistoryMessages)
+	if err != nil {
+		a.logger.Warn("failed to load history", "error", err)
+		return
+	}
+
+	for _, row := range rows {
+		a.history = append(a.history, providers.Message{
+			Role:    row["role"],
+			Content: row["content"],
+		})
+	}
+
+	if len(a.history) > 0 {
+		a.logger.Info("loaded conversation history", "messages", len(a.history))
+	}
+}
+
 func (a *AgentLoop) handleMessage(ctx context.Context, msg bus.InboundMessage) {
 	a.logger.Info("received message",
 		"channel", msg.Channel,
@@ -67,7 +107,7 @@ func (a *AgentLoop) handleMessage(ctx context.Context, msg bus.InboundMessage) {
 
 	// Handle slash commands
 	if len(msg.Content) > 0 && msg.Content[0] == '/' {
-		a.handleCommand(msg)
+		a.handleCommand(ctx, msg)
 		return
 	}
 
@@ -81,16 +121,23 @@ func (a *AgentLoop) handleMessage(ctx context.Context, msg bus.InboundMessage) {
 		return
 	}
 
-	// Build messages for LLM
+	// Run agent loop with full conversation history
 	a.runAgentLoop(ctx, msg)
 }
 
 func (a *AgentLoop) runAgentLoop(ctx context.Context, msg bus.InboundMessage) {
-	messages := []providers.Message{
-		{Role: "user", Content: msg.Content},
-	}
+	// Add user message to history
+	userMsg := providers.Message{Role: "user", Content: msg.Content}
+	a.history = append(a.history, userMsg)
+	a.saveToHistory(ctx, "user", msg.Content)
 
-	systemPrompt := a.buildSystemPrompt()
+	// Build system prompt with relevant memories injected
+	systemPrompt := a.buildSystemPrompt(ctx, msg.Content)
+
+	// Build messages: full conversation history
+	messages := make([]providers.Message, len(a.history))
+	copy(messages, a.history)
+
 	toolDefs := a.registry.ToolDefs()
 
 	maxIterations := 20
@@ -113,11 +160,12 @@ func (a *AgentLoop) runAgentLoop(ctx context.Context, msg bus.InboundMessage) {
 		// If there are tool calls, execute them
 		if len(resp.ToolCalls) > 0 {
 			// Add assistant message with tool calls
-			messages = append(messages, providers.Message{
+			assistantMsg := providers.Message{
 				Role:      "assistant",
 				Content:   resp.Content,
 				ToolCalls: resp.ToolCalls,
-			})
+			}
+			messages = append(messages, assistantMsg)
 
 			// Execute tools (parallel for independent calls)
 			results := a.executeTools(ctx, resp.ToolCalls)
@@ -145,13 +193,23 @@ func (a *AgentLoop) runAgentLoop(ctx context.Context, msg bus.InboundMessage) {
 			continue
 		}
 
-		// Text response — send to user and break
+		// Text response — send to user, save to history, break
 		if resp.Content != "" {
 			a.bus.Send(bus.OutboundMessage{
 				Channel: msg.Channel,
 				ChatID:  msg.ChatID,
 				Content: resp.Content,
 			})
+
+			// Save assistant response to history
+			a.history = append(a.history, providers.Message{
+				Role:    "assistant",
+				Content: resp.Content,
+			})
+			a.saveToHistory(ctx, "assistant", resp.Content)
+
+			// Trim in-memory history if it gets too long
+			a.trimHistory()
 		}
 		return
 	}
@@ -161,6 +219,34 @@ func (a *AgentLoop) runAgentLoop(ctx context.Context, msg bus.InboundMessage) {
 		ChatID:  msg.ChatID,
 		Content: "[Aeon] Max tool iterations reached. Stopping.",
 	})
+}
+
+// saveToHistory persists a message to the SQLite conversation_history table.
+func (a *AgentLoop) saveToHistory(ctx context.Context, role, content string) {
+	if a.memStore == nil {
+		return
+	}
+	if err := a.memStore.SaveHistory(ctx, a.sessionID, role, content); err != nil {
+		a.logger.Warn("failed to save history", "error", err)
+	}
+}
+
+// trimHistory keeps the in-memory history bounded.
+// Drops oldest messages beyond 2x maxHistoryMessages, keeping the most recent ones.
+func (a *AgentLoop) trimHistory() {
+	limit := maxHistoryMessages * 2
+	if len(a.history) > limit {
+		a.history = a.history[len(a.history)-maxHistoryMessages:]
+	}
+}
+
+// clearHistory resets the conversation for /new command.
+func (a *AgentLoop) clearHistory(ctx context.Context) {
+	a.history = nil
+	if a.memStore != nil {
+		a.memStore.ClearHistory(ctx, a.sessionID)
+	}
+	a.sessionID = fmt.Sprintf("session_%d", time.Now().UnixNano())
 }
 
 func (a *AgentLoop) executeTools(ctx context.Context, calls []providers.ToolCall) []tools.ToolResult {
@@ -206,8 +292,8 @@ func (a *AgentLoop) executeTools(ctx context.Context, calls []providers.ToolCall
 	return results
 }
 
-func (a *AgentLoop) buildSystemPrompt() string {
-	return `You are Aeon, an autonomous AI assistant running as a persistent kernel on the user's system.
+func (a *AgentLoop) buildSystemPrompt(ctx context.Context, query string) string {
+	base := `You are Aeon, an autonomous AI assistant running as a persistent kernel on the user's system.
 
 Core capabilities:
 - shell_exec: Run shell commands with security policy enforcement
@@ -223,13 +309,22 @@ Core capabilities:
 Behavior:
 - Be concise and direct. Prefer action over explanation.
 - Use memory_store for important information the user shares.
-- Use memory_recall at the start of conversations to check for relevant context.
 - When a task is complex, consider using spawn_agent to run parts in parallel.
 - Report errors clearly with actionable next steps.
 - For dangerous operations, the security policy will block or require approval.`
+
+	// Inject relevant memories into system prompt
+	if a.memStore != nil && query != "" {
+		memContext := a.memStore.BuildContextFromMemory(ctx, query)
+		if memContext != "" {
+			base += "\n\n" + memContext
+		}
+	}
+
+	return base
 }
 
-func (a *AgentLoop) handleCommand(msg bus.InboundMessage) {
+func (a *AgentLoop) handleCommand(ctx context.Context, msg bus.InboundMessage) {
 	var response string
 
 	switch msg.Content {
@@ -243,11 +338,13 @@ func (a *AgentLoop) handleCommand(msg bus.InboundMessage) {
 		if a.subMgr != nil {
 			taskCount = a.subMgr.Count()
 		}
-		response = fmt.Sprintf("Aeon Status:\n  Provider: %s\n  Tools: %d loaded\n  Active tasks: %d", providerName, toolCount, taskCount)
+		historyCount := len(a.history)
+		response = fmt.Sprintf("Aeon Status:\n  Provider: %s\n  Tools: %d loaded\n  Active tasks: %d\n  Session: %d messages", providerName, toolCount, taskCount, historyCount)
 	case "/skills":
 		response = "Use find_skills tool to list installed skills."
 	case "/new":
-		response = "Conversation cleared."
+		a.clearHistory(ctx)
+		response = "Conversation cleared. Starting fresh."
 	case "/stop":
 		if a.subMgr != nil {
 			count := a.subMgr.StopAll()

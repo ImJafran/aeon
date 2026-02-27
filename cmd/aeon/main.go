@@ -229,6 +229,7 @@ func runInteractive() {
 	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
 	loop.SetScrubber(secAdapter)
 	loop.SetSubagentManager(subMgr)
+	loop.SetMemoryStore(memStore)
 
 	// Print banner
 	providerCount := config.EnabledProviderCount(cfg)
@@ -355,8 +356,15 @@ func runServe() {
 		os.Exit(1)
 	}
 
+	subMgr := agent.NewSubagentManager(provider, registry, msgBus, logger)
+	subMgr.SetScrubber(secAdapter)
+	registry.Register(tools.NewSpawnAgent(subMgr))
+	registry.Register(tools.NewListTasks(subMgr))
+
 	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
 	loop.SetScrubber(secAdapter)
+	loop.SetSubagentManager(subMgr)
+	loop.SetMemoryStore(memStore)
 
 	tg := channels.NewTelegram(cfg.Channels.Telegram.BotToken, cfg.Channels.Telegram.AllowedUsers, logger)
 	if err := tg.Start(ctx, msgBus); err != nil {

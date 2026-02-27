@@ -5,6 +5,8 @@ WORKDIR /app
 # Install build deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
+    python3 \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Cache Go modules
