@@ -99,6 +99,7 @@ func FromConfig(cfg *config.Config, logger *slog.Logger) (Provider, error) {
 	}
 
 	chain := NewChain(chainCfg, logger)
+	chain.SetAll(available)
 	logger.Info("provider chain configured",
 		"primary", chain.PrimaryName(),
 		"total_providers", len(available),

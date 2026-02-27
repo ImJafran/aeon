@@ -12,6 +12,7 @@ type ProviderChain struct {
 	fast       Provider
 	multimodal Provider
 	fallback   Provider
+	all        map[string]Provider // all available providers by name
 	logger     *slog.Logger
 }
 
@@ -47,9 +48,9 @@ func NewChain(cfg ChainConfig, logger *slog.Logger) *ProviderChain {
 
 func (c *ProviderChain) Name() string {
 	if c.primary != nil {
-		return "chain:" + c.primary.Name()
+		return c.primary.Name()
 	}
-	return "chain:none"
+	return "none"
 }
 
 func (c *ProviderChain) Available() bool {
@@ -111,4 +112,28 @@ func (c *ProviderChain) PrimaryName() string {
 		return c.primary.Name()
 	}
 	return "none"
+}
+
+// SetAll stores the full set of available providers for runtime switching.
+func (c *ProviderChain) SetAll(providers map[string]Provider) {
+	c.all = providers
+}
+
+// SwitchTo changes the primary provider by name. Returns error if not found.
+func (c *ProviderChain) SwitchTo(name string) error {
+	if p, ok := c.all[name]; ok {
+		c.primary = p
+		c.logger.Info("switched primary provider", "provider", p.Name())
+		return nil
+	}
+	return fmt.Errorf("unknown provider %q, available: %v", name, c.AvailableNames())
+}
+
+// AvailableNames returns the names of all configured providers.
+func (c *ProviderChain) AvailableNames() []string {
+	var names []string
+	for name := range c.all {
+		names = append(names, name)
+	}
+	return names
 }

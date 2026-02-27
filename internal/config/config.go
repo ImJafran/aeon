@@ -18,6 +18,7 @@ type Config struct {
 	Skills    SkillsConfig    `yaml:"skills"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Memory    MemoryConfig    `yaml:"memory"`
+	Agent     AgentConfig     `yaml:"agent"`
 	Log       LogConfig       `yaml:"log"`
 }
 
@@ -46,6 +47,8 @@ type GeminiConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	APIKey       string `yaml:"api_key"`
 	DefaultModel string `yaml:"default_model"`
+	AudioModel   string `yaml:"audio_model"` // native audio (transcription/live)
+	TTSModel     string `yaml:"tts_model"`   // text-to-speech
 }
 
 type OpenAICompatConfig struct {
@@ -92,6 +95,10 @@ type SchedulerConfig struct {
 type MemoryConfig struct {
 	AutoSave              bool `yaml:"auto_save"`
 	CompactionThreshold   int  `yaml:"compaction_threshold"`
+}
+
+type AgentConfig struct {
+	SystemPrompt string `yaml:"system_prompt"`
 }
 
 type LogConfig struct {
@@ -169,6 +176,16 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Memory.CompactionThreshold == 0 {
 		cfg.Memory.CompactionThreshold = 10
+	}
+	if cfg.Agent.SystemPrompt == "" {
+		cfg.Agent.SystemPrompt = `You are Aeon, a persistent AI assistant on the user's system. You have tools — use them, don't describe them.
+
+Rules:
+- Be brief. 1-3 sentences max. No filler, no emojis, no sign-offs.
+- Act first, explain only if asked.
+- Save important facts with memory_store (names, preferences, decisions, project details).
+- Check memory_recall before asking the user to repeat themselves.
+- For complex tasks, use spawn_agent to parallelize.`
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"

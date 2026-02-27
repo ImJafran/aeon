@@ -108,13 +108,22 @@ func (p *AnthropicProvider) buildRequest(req CompletionRequest) anthropicRequest
 	msgs := make([]anthropicMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		if m.Role == "tool" {
+			// Merge consecutive tool results into a single user message
+			toolBlock := map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     m.Content,
+			}
+			if n := len(msgs); n > 0 && msgs[n-1].Role == "user" {
+				// Previous message is already a user message with tool results — append
+				if blocks, ok := msgs[n-1].Content.([]map[string]any); ok {
+					msgs[n-1].Content = append(blocks, toolBlock)
+					continue
+				}
+			}
 			msgs = append(msgs, anthropicMessage{
-				Role: "user",
-				Content: []map[string]any{{
-					"type":        "tool_result",
-					"tool_use_id": m.ToolCallID,
-					"content":     m.Content,
-				}},
+				Role:    "user",
+				Content: []map[string]any{toolBlock},
 			})
 			continue
 		}
