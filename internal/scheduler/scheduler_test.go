@@ -135,6 +135,10 @@ func TestComputeNextRun(t *testing.T) {
 		{"every 2h", now.Add(2 * time.Hour), false},
 		{"every 1d", now.Add(24 * time.Hour), false},
 		{"every 30s", now.Add(30 * time.Second), false},
+		{"in 10m", now.Add(10 * time.Minute), false},
+		{"in 2h", now.Add(2 * time.Hour), false},
+		{"at 14:00", time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC), false},
+		{"at 10:00", time.Date(2024, 1, 2, 10, 0, 0, 0, time.UTC), false}, // already past noon, so tomorrow
 		{"hourly", now.Add(1 * time.Hour), false},
 		{"daily", now.Add(24 * time.Hour), false},
 		{"weekly", now.Add(7 * 24 * time.Hour), false},
@@ -158,6 +162,21 @@ func TestComputeNextRun(t *testing.T) {
 				t.Errorf("got %v, want %v", next, tt.expected)
 			}
 		})
+	}
+}
+
+func TestIsOneShot(t *testing.T) {
+	if !IsOneShot("in 10m") {
+		t.Error("'in 10m' should be one-shot")
+	}
+	if !IsOneShot("at 16:50") {
+		t.Error("'at 16:50' should be one-shot")
+	}
+	if IsOneShot("every 5m") {
+		t.Error("'every 5m' should not be one-shot")
+	}
+	if IsOneShot("daily") {
+		t.Error("'daily' should not be one-shot")
 	}
 }
 

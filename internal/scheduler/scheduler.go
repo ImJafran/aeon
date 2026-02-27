@@ -273,6 +273,12 @@ func (s *Scheduler) fireJob(ctx context.Context, job Job) {
 			s.onTrigger(job)
 		}
 
+		// Auto-disable one-shot reminders after they fire
+		if IsOneShot(job.Schedule) {
+			s.logger.Info("one-shot reminder fired, disabling", "id", job.ID, "name", job.Name)
+			s.Pause(job.ID)
+		}
+
 		_ = jobCtx // context passed to trigger if needed
 	}()
 }
@@ -295,39 +301,31 @@ func (s *Scheduler) RunningCount() int {
 	return len(s.running)
 }
 
+// IsOneShot returns true if the schedule is a one-time reminder ("in ..." or "at ...").
+func IsOneShot(schedule string) bool {
+	s := strings.TrimSpace(strings.ToLower(schedule))
+	return strings.HasPrefix(s, "in ") || strings.HasPrefix(s, "at ")
+}
+
 // computeNextRun calculates the next run time from a schedule expression.
-// Supports: "every Xm", "every Xh", "every Xd", or simple interval strings.
+// Supports: "every Xm", "every Xh", "every Xd", "in Xm/Xh" (one-shot), "at HH:MM" (one-shot),
+// or simple interval strings like "hourly", "daily", "weekly".
 func computeNextRun(schedule string, from time.Time) (time.Time, error) {
 	schedule = strings.TrimSpace(strings.ToLower(schedule))
 
-	// Simple interval format: "every 5m", "every 1h", "every 2d"
+	// One-shot: "in 10m", "in 2h", "in 30s"
+	if strings.HasPrefix(schedule, "in ") {
+		return parseInterval(strings.TrimPrefix(schedule, "in "), from)
+	}
+
+	// One-shot: "at 16:50", "at 4:50pm", "at 4:50 pm"
+	if strings.HasPrefix(schedule, "at ") {
+		return parseAtTime(strings.TrimPrefix(schedule, "at "), from)
+	}
+
+	// Recurring interval: "every 5m", "every 1h", "every 2d"
 	if strings.HasPrefix(schedule, "every ") {
-		interval := strings.TrimPrefix(schedule, "every ")
-		interval = strings.TrimSpace(interval)
-
-		if len(interval) < 2 {
-			return time.Time{}, fmt.Errorf("invalid interval: %s", interval)
-		}
-
-		unit := interval[len(interval)-1]
-		numStr := interval[:len(interval)-1]
-		num, err := strconv.Atoi(numStr)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("invalid interval number: %s", numStr)
-		}
-
-		switch unit {
-		case 'm':
-			return from.Add(time.Duration(num) * time.Minute), nil
-		case 'h':
-			return from.Add(time.Duration(num) * time.Hour), nil
-		case 'd':
-			return from.Add(time.Duration(num) * 24 * time.Hour), nil
-		case 's':
-			return from.Add(time.Duration(num) * time.Second), nil
-		default:
-			return time.Time{}, fmt.Errorf("unknown interval unit: %c (use m, h, d, or s)", unit)
-		}
+		return parseInterval(strings.TrimPrefix(schedule, "every "), from)
 	}
 
 	// Simple cron-like: "hourly", "daily", "weekly"
@@ -340,7 +338,69 @@ func computeNextRun(schedule string, from time.Time) (time.Time, error) {
 		return from.Add(7 * 24 * time.Hour), nil
 	}
 
-	return time.Time{}, fmt.Errorf("unsupported schedule format: %s (use 'every Xm/Xh/Xd' or 'hourly/daily/weekly')", schedule)
+	return time.Time{}, fmt.Errorf("unsupported schedule format: %s (use 'in Xm', 'at HH:MM', 'every Xm/Xh/Xd', or 'hourly/daily/weekly')", schedule)
+}
+
+// parseInterval parses a duration like "10m", "2h", "1d", "30s".
+func parseInterval(interval string, from time.Time) (time.Time, error) {
+	interval = strings.TrimSpace(interval)
+
+	if len(interval) < 2 {
+		return time.Time{}, fmt.Errorf("invalid interval: %s", interval)
+	}
+
+	unit := interval[len(interval)-1]
+	numStr := interval[:len(interval)-1]
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid interval number: %s", numStr)
+	}
+
+	switch unit {
+	case 'm':
+		return from.Add(time.Duration(num) * time.Minute), nil
+	case 'h':
+		return from.Add(time.Duration(num) * time.Hour), nil
+	case 'd':
+		return from.Add(time.Duration(num) * 24 * time.Hour), nil
+	case 's':
+		return from.Add(time.Duration(num) * time.Second), nil
+	default:
+		return time.Time{}, fmt.Errorf("unknown interval unit: %c (use m, h, d, or s)", unit)
+	}
+}
+
+// parseAtTime parses a time-of-day like "16:50", "4:50pm", "4:50 pm".
+// If the time has already passed today, schedules for tomorrow.
+func parseAtTime(timeStr string, from time.Time) (time.Time, error) {
+	timeStr = strings.TrimSpace(timeStr)
+	timeStr = strings.ReplaceAll(timeStr, " ", "") // "4:50 pm" → "4:50pm"
+
+	// Try 24h format first: "16:50"
+	layouts := []string{"15:04", "3:04pm", "3:04PM", "3pm", "3PM", "15"}
+
+	var parsed time.Time
+	var err error
+	for _, layout := range layouts {
+		parsed, err = time.Parse(layout, timeStr)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid time: %s (use HH:MM, H:MMpm, or Hpm)", timeStr)
+	}
+
+	// Build target time today
+	target := time.Date(from.Year(), from.Month(), from.Day(),
+		parsed.Hour(), parsed.Minute(), 0, 0, from.Location())
+
+	// If target has already passed, schedule for tomorrow
+	if target.Before(from) {
+		target = target.Add(24 * time.Hour)
+	}
+
+	return target, nil
 }
 
 func scanJobs(rows *sql.Rows) ([]Job, error) {

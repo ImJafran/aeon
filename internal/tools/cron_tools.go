@@ -21,7 +21,7 @@ func NewCronManage(sched *scheduler.Scheduler) *CronManageTool {
 
 func (t *CronManageTool) Name() string { return "cron_manage" }
 func (t *CronManageTool) Description() string {
-	return "Manage scheduled recurring tasks. Actions: create, list, pause, resume, delete, get."
+	return "Set reminders and schedule tasks. Use this when a user says 'remind me', 'in X minutes', 'at X o'clock', or wants something recurring."
 }
 func (t *CronManageTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -34,27 +34,27 @@ func (t *CronManageTool) Parameters() json.RawMessage {
 			},
 			"id": {
 				"type": "integer",
-				"description": "Job ID (required for pause, resume, delete, get)"
+				"description": "Job ID (for pause, resume, delete, get)"
 			},
 			"name": {
 				"type": "string",
-				"description": "Job name (required for create)"
+				"description": "Short name for the reminder or task (e.g. 'iftar_party', 'standup_meeting')"
 			},
 			"schedule": {
 				"type": "string",
-				"description": "Schedule expression: 'every 5m', 'every 1h', 'every 1d', 'hourly', 'daily', 'weekly' (required for create)"
-			},
-			"skill_name": {
-				"type": "string",
-				"description": "Skill to run (for create, optional if command is provided)"
+				"description": "When to fire. Examples: 'in 1m', 'in 10m', 'in 2h' (one-time after delay), 'at 16:50', 'at 4:50pm' (one-time at clock time), 'every 5m', 'every 1h', 'daily', 'hourly' (recurring)"
 			},
 			"command": {
 				"type": "string",
-				"description": "Shell command to run (for create, optional if skill_name is provided)"
+				"description": "The reminder text or message to send when it fires (e.g. 'Iftar Party at Rajshahi WordPress Community')"
+			},
+			"skill_name": {
+				"type": "string",
+				"description": "Skill to run instead of a reminder message (optional, advanced)"
 			},
 			"params": {
 				"type": "string",
-				"description": "JSON params for the skill (for create, default: '{}')"
+				"description": "JSON params for the skill (optional, default: '{}')"
 			}
 		},
 		"required": ["action"]
@@ -111,9 +111,13 @@ func (t *CronManageTool) create(p cronManageParams) (ToolResult, error) {
 		return ToolResult{ForLLM: fmt.Sprintf("Error creating job: %v", err)}, nil
 	}
 
+	label := "Scheduled"
+	if scheduler.IsOneShot(p.Schedule) {
+		label = "Reminder set"
+	}
 	return ToolResult{
-		ForLLM:  fmt.Sprintf("Cron job created (id=%d, name=%s, schedule=%s)", id, p.Name, p.Schedule),
-		ForUser: fmt.Sprintf("Scheduled: %s (%s)", p.Name, p.Schedule),
+		ForLLM:  fmt.Sprintf("Created (id=%d, name=%s, schedule=%s, command=%s)", id, p.Name, p.Schedule, p.Command),
+		ForUser: fmt.Sprintf("%s: %s (%s)", label, p.Name, p.Schedule),
 	}, nil
 }
 
