@@ -15,6 +15,11 @@ import (
 	"github.com/jafran/aeon/internal/bus"
 )
 
+// Transcriber converts audio to text.
+type Transcriber interface {
+	Transcribe(ctx context.Context, audioData []byte, mimeType string) (string, error)
+}
+
 const (
 	telegramAPIBase  = "https://api.telegram.org/bot"
 	maxMessageLen    = 4096
@@ -30,7 +35,19 @@ type TelegramChannel struct {
 	client     *http.Client
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
+
+	typingMu     sync.Mutex
+	typingCancel map[string]context.CancelFunc // per-chat typing indicator cancellers
+	typingMsgID  map[string]int                // per-chat "Thinking..." message ID
+
+	transcriber Transcriber
 }
+
+// SetTranscriber sets the speech-to-text provider for voice messages.
+func (t *TelegramChannel) SetTranscriber(tr Transcriber) {
+	t.transcriber = tr
+}
+
 
 // NewTelegram creates a new Telegram channel.
 func NewTelegram(token string, allowedIDs []int64, logger *slog.Logger) *TelegramChannel {
@@ -41,6 +58,8 @@ func NewTelegram(token string, allowedIDs []int64, logger *slog.Logger) *Telegra
 		client: &http.Client{
 			Timeout: time.Duration(pollTimeout+10) * time.Second,
 		},
+		typingCancel: make(map[string]context.CancelFunc),
+		typingMsgID:  make(map[string]int),
 	}
 }
 
@@ -149,8 +168,39 @@ func (t *TelegramChannel) handleUpdate(_ context.Context, update tgUpdate) {
 	mediaType := bus.MediaText
 
 	if msg.Voice != nil {
-		mediaType = bus.MediaAudio
-		content = fmt.Sprintf("[voice message: file_id=%s, duration=%ds]", msg.Voice.FileID, msg.Voice.Duration)
+		t.logger.Info("voice message received", "chat_id", msg.Chat.ID, "duration", msg.Voice.Duration)
+
+		if t.transcriber != nil {
+			if text, err := t.transcribeVoice(msg.Voice.FileID); err == nil && text != "" {
+				content = text
+			} else {
+				t.logger.Error("voice transcription failed", "error", err)
+				content = fmt.Sprintf("[voice message: %ds, transcription failed]", msg.Voice.Duration)
+			}
+		} else {
+			content = fmt.Sprintf("[voice message: %ds, no transcriber configured]", msg.Voice.Duration)
+		}
+	} else if msg.Audio != nil {
+		// Audio file (music, podcast, etc.) — try to transcribe
+		t.logger.Info("audio message received", "chat_id", msg.Chat.ID, "duration", msg.Audio.Duration)
+		if t.transcriber != nil {
+			if text, err := t.transcribeVoice(msg.Audio.FileID); err == nil && text != "" {
+				content = text
+			} else {
+				t.logger.Error("audio transcription failed", "error", err)
+				content = fmt.Sprintf("[audio: %ds, title=%s, transcription failed]", msg.Audio.Duration, msg.Audio.Title)
+			}
+		} else {
+			content = fmt.Sprintf("[audio: %ds, title=%s, no transcriber]", msg.Audio.Duration, msg.Audio.Title)
+		}
+	} else if msg.Video != nil {
+		mediaType = bus.MediaImage
+		content = fmt.Sprintf("[video: %ds, %dx%d, file_id=%s]", msg.Video.Duration, msg.Video.Width, msg.Video.Height, msg.Video.FileID)
+		if msg.Caption != "" {
+			content += " " + msg.Caption
+		}
+	} else if msg.VideoNote != nil {
+		content = fmt.Sprintf("[video_note: %ds, file_id=%s]", msg.VideoNote.Duration, msg.VideoNote.FileID)
 	} else if msg.Photo != nil && len(msg.Photo) > 0 {
 		mediaType = bus.MediaImage
 		// Get the largest photo
@@ -168,15 +218,20 @@ func (t *TelegramChannel) handleUpdate(_ context.Context, update tgUpdate) {
 		return
 	}
 
+	chatID := fmt.Sprintf("%d", msg.Chat.ID)
+
 	// Publish to bus
 	t.msgBus.Publish(bus.InboundMessage{
 		Channel:   "telegram",
-		ChatID:    fmt.Sprintf("%d", msg.Chat.ID),
+		ChatID:    chatID,
 		UserID:    fmt.Sprintf("%d", msg.From.ID),
 		Content:   content,
 		MediaType: mediaType,
 		Timestamp: time.Unix(int64(msg.Date), 0),
 	})
+
+	// Show typing indicator while the agent processes
+	t.startTyping(chatID)
 }
 
 // handleCallback processes inline keyboard button presses.
@@ -186,13 +241,18 @@ func (t *TelegramChannel) handleCallback(cb *tgCallbackQuery) {
 	// Answer the callback to remove the loading indicator
 	t.answerCallback(cb.ID)
 
+	chatID := fmt.Sprintf("%d", cb.Message.Chat.ID)
+
 	// Publish as inbound message
 	t.msgBus.Publish(bus.InboundMessage{
 		Channel: "telegram",
-		ChatID:  fmt.Sprintf("%d", cb.Message.Chat.ID),
+		ChatID:  chatID,
 		UserID:  fmt.Sprintf("%d", cb.From.ID),
 		Content: cb.Data,
 	})
+
+	// Show typing indicator while the agent processes
+	t.startTyping(chatID)
 }
 
 // sendResponse sends an outbound message to Telegram.
@@ -206,6 +266,9 @@ func (t *TelegramChannel) sendResponse(msg bus.OutboundMessage) {
 		return
 	}
 
+	// Stop typing indicator now that we have a response
+	t.stopTyping(msg.ChatID)
+
 	// Chunk messages that exceed Telegram's limit
 	chunks := chunkMessage(content, maxMessageLen)
 	for _, chunk := range chunks {
@@ -213,6 +276,109 @@ func (t *TelegramChannel) sendResponse(msg bus.OutboundMessage) {
 			t.logger.Error("failed to send telegram message", "error", err, "chat_id", msg.ChatID)
 		}
 	}
+}
+
+// --- Typing indicator ---
+
+// sendChatAction sends a chat action (e.g. "typing") to a Telegram chat.
+func (t *TelegramChannel) sendChatAction(chatID, action string) {
+	body, _ := json.Marshal(map[string]string{
+		"chat_id": chatID,
+		"action":  action,
+	})
+	resp, err := t.client.Post(t.apiURL("sendChatAction"), "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.logger.Debug("sendChatAction failed", "error", err, "chat_id", chatID)
+		return
+	}
+	resp.Body.Close()
+}
+
+// startTyping sends a "Thinking..." placeholder and pulses the typing indicator.
+func (t *TelegramChannel) startTyping(chatID string) {
+	t.typingMu.Lock()
+	// Cancel any existing typing goroutine for this chat
+	if cancel, ok := t.typingCancel[chatID]; ok {
+		cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.typingCancel[chatID] = cancel
+	t.typingMu.Unlock()
+
+	// Send the placeholder message
+	if msgID, err := t.sendAndGetID(chatID, "_Thinking..._"); err == nil {
+		t.typingMu.Lock()
+		t.typingMsgID[chatID] = msgID
+		t.typingMu.Unlock()
+	}
+
+	go func() {
+		t.sendChatAction(chatID, "typing")
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				t.sendChatAction(chatID, "typing")
+			}
+		}
+	}()
+}
+
+// stopTyping cancels the typing goroutine and deletes the "Thinking..." message.
+func (t *TelegramChannel) stopTyping(chatID string) {
+	t.typingMu.Lock()
+	if cancel, ok := t.typingCancel[chatID]; ok {
+		cancel()
+		delete(t.typingCancel, chatID)
+	}
+	msgID := t.typingMsgID[chatID]
+	delete(t.typingMsgID, chatID)
+	t.typingMu.Unlock()
+
+	if msgID != 0 {
+		t.deleteMessage(chatID, msgID)
+	}
+}
+
+// sendAndGetID sends a message and returns its message ID.
+func (t *TelegramChannel) sendAndGetID(chatID, text string) (int, error) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"chat_id":    chatID,
+		"text":       text,
+		"parse_mode": "Markdown",
+	})
+
+	resp, err := t.client.Post(t.apiURL("sendMessage"), "application/json", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	var result tgResponse[tgMessage]
+	if err := json.Unmarshal(data, &result); err != nil {
+		return 0, err
+	}
+	if !result.OK {
+		return 0, fmt.Errorf("sendMessage failed: %s", result.Description)
+	}
+	return result.Result.MessageID, nil
+}
+
+// deleteMessage deletes a message by chat and message ID.
+func (t *TelegramChannel) deleteMessage(chatID string, messageID int) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	})
+	resp, err := t.client.Post(t.apiURL("deleteMessage"), "application/json", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }
 
 // --- Telegram API methods ---
@@ -390,15 +556,18 @@ type tgUpdate struct {
 }
 
 type tgMessage struct {
-	MessageID int         `json:"message_id"`
-	From      *tgUser     `json:"from"`
-	Chat      tgChat      `json:"chat"`
-	Date      int         `json:"date"`
-	Text      string      `json:"text"`
-	Caption   string      `json:"caption"`
-	Voice     *tgVoice    `json:"voice"`
-	Photo     []tgPhoto   `json:"photo"`
-	Document  *tgDocument `json:"document"`
+	MessageID int          `json:"message_id"`
+	From      *tgUser      `json:"from"`
+	Chat      tgChat       `json:"chat"`
+	Date      int          `json:"date"`
+	Text      string       `json:"text"`
+	Caption   string       `json:"caption"`
+	Voice     *tgVoice     `json:"voice"`
+	Audio     *tgAudio     `json:"audio"`
+	Video     *tgVideo     `json:"video"`
+	VideoNote *tgVideoNote `json:"video_note"`
+	Photo     []tgPhoto    `json:"photo"`
+	Document  *tgDocument  `json:"document"`
 }
 
 type tgUser struct {
@@ -413,6 +582,24 @@ type tgChat struct {
 }
 
 type tgVoice struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+}
+
+type tgAudio struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	Title    string `json:"title"`
+}
+
+type tgVideo struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+type tgVideoNote struct {
 	FileID   string `json:"file_id"`
 	Duration int    `json:"duration"`
 }
@@ -438,6 +625,29 @@ type tgCallbackQuery struct {
 type tgFile struct {
 	FileID   string `json:"file_id"`
 	FilePath string `json:"file_path"`
+}
+
+// --- Voice transcription ---
+
+// transcribeVoice downloads a Telegram voice file and transcribes it.
+func (t *TelegramChannel) transcribeVoice(fileID string) (string, error) {
+	fileURL, err := t.GetFileURL(fileID)
+	if err != nil {
+		return "", fmt.Errorf("getting file URL: %w", err)
+	}
+
+	resp, err := t.client.Get(fileURL)
+	if err != nil {
+		return "", fmt.Errorf("downloading voice: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading voice data: %w", err)
+	}
+
+	return t.transcriber.Transcribe(context.Background(), data, "audio/ogg")
 }
 
 // --- Utilities ---
