@@ -181,11 +181,18 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
+// NoProvider is returned when no LLM provider is configured.
+// It's a warning, not a fatal error — Aeon runs in echo mode without providers.
+var NoProvider = fmt.Errorf("no LLM provider configured — running in echo mode")
+
 func validate(cfg *Config) error {
-	if !hasAnyProvider(cfg) {
-		return fmt.Errorf("at least one LLM provider must be configured. Run 'aeon init' for setup")
-	}
+	// No longer fatal — agent loop handles nil provider with echo mode
 	return nil
+}
+
+// HasProvider returns true if at least one provider is configured.
+func HasProvider(cfg *Config) bool {
+	return hasAnyProvider(cfg)
 }
 
 func hasAnyProvider(cfg *Config) bool {

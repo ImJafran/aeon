@@ -8,7 +8,7 @@ services:
       - go-cache:/root/.cache/go-build
       - go-mod:/go/pkg/mod
     working_dir: /app
-    command: ["make", "run"]
+    command: ["sh", "-c", "make build && ./bin/aeon init && ./bin/aeon"]
     tty: true
     stdin_open: true
     environment:

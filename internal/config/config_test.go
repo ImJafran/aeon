@@ -38,9 +38,13 @@ log:
 `
 	os.WriteFile(cfgPath, []byte(content), 0644)
 
-	_, err := Load(cfgPath)
-	if err == nil {
-		t.Error("expected validation error for config with no provider")
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// No provider configured — should still load, but HasProvider returns false
+	if HasProvider(cfg) {
+		t.Error("expected no provider to be detected")
 	}
 }
 
