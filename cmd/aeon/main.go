@@ -202,7 +202,21 @@ func runInteractive() {
 		logger.Warn("failed to initialize scheduler", "error", err)
 	} else {
 		sched.OnTrigger(func(job scheduler.Job) {
-			// Fire cron job as a system message through the bus
+			// One-shot reminders → send directly to user
+			if scheduler.IsOneShot(job.Schedule) {
+				// Notify all allowed Telegram users
+				if cfg.Channels.Telegram != nil {
+					for _, uid := range cfg.Channels.Telegram.AllowedUsers {
+						msgBus.Send(bus.OutboundMessage{
+							Channel: "telegram",
+							ChatID:  fmt.Sprintf("%d", uid),
+							Content: fmt.Sprintf("Reminder: %s", job.Command),
+						})
+					}
+				}
+				return
+			}
+			// Recurring jobs → process through agent loop
 			msgBus.Publish(bus.InboundMessage{
 				Channel: "system",
 				Content: fmt.Sprintf("[cron:%s] %s", job.Name, job.Command),
@@ -230,6 +244,7 @@ func runInteractive() {
 	loop.SetScrubber(secAdapter)
 	loop.SetSubagentManager(subMgr)
 	loop.SetMemoryStore(memStore)
+	loop.SetSystemPrompt(cfg.Agent.SystemPrompt)
 
 	// Print banner
 	providerCount := config.EnabledProviderCount(cfg)
@@ -257,6 +272,9 @@ func runInteractive() {
 	var tg *channels.TelegramChannel
 	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.Enabled && cfg.Channels.Telegram.BotToken != "" {
 		tg = channels.NewTelegram(cfg.Channels.Telegram.BotToken, cfg.Channels.Telegram.AllowedUsers, logger)
+		if cfg.Provider.Gemini != nil && cfg.Provider.Gemini.APIKey != "" {
+			tg.SetTranscriber(channels.NewGeminiTranscriber(cfg.Provider.Gemini.APIKey, cfg.Provider.Gemini.DefaultModel))
+		}
 		if err := tg.Start(ctx, msgBus); err != nil {
 			logger.Error("failed to start telegram channel", "error", err)
 		} else {
@@ -341,6 +359,16 @@ func runServe() {
 	sched, err := scheduler.New(memStore.DB(), logger)
 	if err == nil {
 		sched.OnTrigger(func(job scheduler.Job) {
+			if scheduler.IsOneShot(job.Schedule) {
+				for _, uid := range cfg.Channels.Telegram.AllowedUsers {
+					msgBus.Send(bus.OutboundMessage{
+						Channel: "telegram",
+						ChatID:  fmt.Sprintf("%d", uid),
+						Content: fmt.Sprintf("Reminder: %s", job.Command),
+					})
+				}
+				return
+			}
 			msgBus.Publish(bus.InboundMessage{
 				Channel: "system",
 				Content: fmt.Sprintf("[cron:%s] %s", job.Name, job.Command),
@@ -365,8 +393,12 @@ func runServe() {
 	loop.SetScrubber(secAdapter)
 	loop.SetSubagentManager(subMgr)
 	loop.SetMemoryStore(memStore)
+	loop.SetSystemPrompt(cfg.Agent.SystemPrompt)
 
 	tg := channels.NewTelegram(cfg.Channels.Telegram.BotToken, cfg.Channels.Telegram.AllowedUsers, logger)
+	if cfg.Provider.Gemini != nil && cfg.Provider.Gemini.APIKey != "" {
+		tg.SetTranscriber(channels.NewGeminiTranscriber(cfg.Provider.Gemini.APIKey, cfg.Provider.Gemini.DefaultModel))
+	}
 	if err := tg.Start(ctx, msgBus); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting Telegram: %v\n", err)
 		os.Exit(1)

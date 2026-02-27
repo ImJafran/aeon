@@ -12,13 +12,14 @@ import (
 )
 
 type SystemInfo struct {
-	OS           string
-	Arch         string
-	PythonPath   string
-	PythonVer    string
-	HasClaudeCLI bool
+	OS              string
+	Arch            string
+	PythonPath      string
+	PythonVer       string
+	HasClaudeCLI    bool
 	HasAnthropicKey bool
 	HasGeminiKey    bool
+	HasTelegram     bool
 }
 
 func DetectSystem() *SystemInfo {
@@ -43,6 +44,9 @@ func DetectSystem() *SystemInfo {
 	}
 	if os.Getenv("GEMINI_API_KEY") != "" {
 		info.HasGeminiKey = true
+	}
+	if os.Getenv("TELEGRAM_BOT_TOKEN") != "" {
+		info.HasTelegram = true
 	}
 
 	return info
@@ -164,6 +168,21 @@ func GenerateDefaultConfig(info *SystemInfo) string {
 		b.WriteString("  #   base_url: http://localhost:11434/v1\n")
 		b.WriteString("  #   api_key: ollama\n")
 		b.WriteString("  #   default_model: llama3.1\n")
+	}
+
+	b.WriteString("\nchannels:\n")
+	if info.HasTelegram {
+		b.WriteString("  telegram:\n")
+		b.WriteString("    enabled: true\n")
+		b.WriteString("    bot_token: ${TELEGRAM_BOT_TOKEN}\n")
+		if uid := os.Getenv("TELEGRAM_USER_ID"); uid != "" {
+			b.WriteString(fmt.Sprintf("    allowed_users: [%s]\n", uid))
+		}
+	} else {
+		b.WriteString("  # telegram:\n")
+		b.WriteString("  #   enabled: true\n")
+		b.WriteString("  #   bot_token: ${TELEGRAM_BOT_TOKEN}\n")
+		b.WriteString("  #   allowed_users: [your-telegram-id]\n")
 	}
 
 	b.WriteString("\nsecurity:\n")

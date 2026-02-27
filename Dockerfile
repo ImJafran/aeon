@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     python3 \
     python3-venv \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Cache Go modules
@@ -25,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-venv \
     python3-pip \
     ca-certificates \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

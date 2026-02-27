@@ -7,10 +7,28 @@ services:
       - .:/app
       - go-cache:/root/.cache/go-build
       - go-mod:/go/pkg/mod
+      - aeon-data:/tmp/aeon-dev
+      - ./config.yaml:/tmp/aeon-dev/config.yaml
     working_dir: /app
     command: ["sh", "-c", "make build && ./bin/aeon init && ./bin/aeon"]
     tty: true
     stdin_open: true
+    environment:
+      - CGO_ENABLED=0
+      - AEON_HOME=/tmp/aeon-dev
+
+  telegram:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app
+      - go-cache:/root/.cache/go-build
+      - go-mod:/go/pkg/mod
+      - aeon-data:/tmp/aeon-dev
+      - ./config.yaml:/tmp/aeon-dev/config.yaml
+    working_dir: /app
+    command: ["sh", "-c", "make build && ./bin/aeon init && ./bin/aeon serve"]
     environment:
       - CGO_ENABLED=0
       - AEON_HOME=/tmp/aeon-dev
@@ -44,3 +62,4 @@ services:
 volumes:
   go-cache:
   go-mod:
+  aeon-data:

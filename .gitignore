@@ -15,3 +15,9 @@ vendor/
 
 # Aeon runtime
 .aeon/
+
+# Secrets
+.env
+config.yaml
+aeon-vps.pem
+CLAUDE.md

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,15 +23,16 @@ type CredentialScrubber interface {
 const maxHistoryMessages = 20
 
 type AgentLoop struct {
-	bus       *bus.MessageBus
-	provider  providers.Provider
-	registry  *tools.Registry
-	memStore  *memory.Store
-	scrubber  CredentialScrubber
-	subMgr    *SubagentManager
-	logger    *slog.Logger
-	sessionID string
-	history   []providers.Message // in-memory conversation history for current session
+	bus          *bus.MessageBus
+	provider     providers.Provider
+	registry     *tools.Registry
+	memStore     *memory.Store
+	scrubber     CredentialScrubber
+	subMgr       *SubagentManager
+	logger       *slog.Logger
+	sessionID    string
+	systemPrompt string
+	history      []providers.Message // in-memory conversation history for current session
 }
 
 func NewAgentLoop(b *bus.MessageBus, provider providers.Provider, registry *tools.Registry, logger *slog.Logger) *AgentLoop {
@@ -55,6 +57,10 @@ func (a *AgentLoop) SetMemoryStore(m *memory.Store) {
 	a.memStore = m
 }
 
+func (a *AgentLoop) SetSystemPrompt(prompt string) {
+	a.systemPrompt = prompt
+}
+
 func (a *AgentLoop) Run(ctx context.Context) {
 	a.logger.Info("agent loop started", "session", a.sessionID)
 
@@ -75,10 +81,17 @@ func (a *AgentLoop) Run(ctx context.Context) {
 	}
 }
 
-// loadHistory loads the last N messages from SQLite into memory.
+// loadHistory loads the last N messages from the most recent session into memory.
 func (a *AgentLoop) loadHistory(ctx context.Context) {
 	if a.memStore == nil {
 		return
+	}
+
+	// Resume the most recent session instead of starting empty
+	prevSession, err := a.memStore.GetLatestSessionID()
+	if err == nil && prevSession != "" {
+		a.sessionID = prevSession
+		a.logger.Info("resuming session", "session", prevSession)
 	}
 
 	rows, err := a.memStore.GetHistory(ctx, a.sessionID, maxHistoryMessages)
@@ -166,6 +179,7 @@ func (a *AgentLoop) runAgentLoop(ctx context.Context, msg bus.InboundMessage) {
 				ToolCalls: resp.ToolCalls,
 			}
 			messages = append(messages, assistantMsg)
+			a.history = append(a.history, assistantMsg)
 
 			// Execute tools (parallel for independent calls)
 			results := a.executeTools(ctx, resp.ToolCalls)
@@ -175,11 +189,13 @@ func (a *AgentLoop) runAgentLoop(ctx context.Context, msg bus.InboundMessage) {
 				if a.scrubber != nil {
 					forLLM = a.scrubber.ScrubCredentials(forLLM)
 				}
-				messages = append(messages, providers.Message{
+				toolMsg := providers.Message{
 					Role:       "tool",
 					Content:    forLLM,
 					ToolCallID: result.ToolCallID,
-				})
+				}
+				messages = append(messages, toolMsg)
+				a.history = append(a.history, toolMsg)
 
 				// Send user-visible output if any
 				if result.ForUser != "" && !result.Silent {
@@ -293,25 +309,12 @@ func (a *AgentLoop) executeTools(ctx context.Context, calls []providers.ToolCall
 }
 
 func (a *AgentLoop) buildSystemPrompt(ctx context.Context, query string) string {
-	base := `You are Aeon, an autonomous AI assistant running as a persistent kernel on the user's system.
+	base := a.systemPrompt
 
-Core capabilities:
-- shell_exec: Run shell commands with security policy enforcement
-- file_read, file_write, file_edit: File operations
-- web_read: Fetch and extract web content
-- memory_store, memory_recall: Persistent long-term memory across sessions
-- skill_factory: Create new Python/Bash tools that persist
-- find_skills, read_skill, run_skill: Use evolved skills
-- cron_manage: Schedule recurring tasks
-- spawn_agent: Delegate tasks to background subagents
-- list_tasks: View active background tasks
-
-Behavior:
-- Be concise and direct. Prefer action over explanation.
-- Use memory_store for important information the user shares.
-- When a task is complex, consider using spawn_agent to run parts in parallel.
-- Report errors clearly with actionable next steps.
-- For dangerous operations, the security policy will block or require approval.`
+	// Inject current model info
+	if a.provider != nil {
+		base += fmt.Sprintf("\n\nYou are currently running on: %s", a.provider.Name())
+	}
 
 	// Inject relevant memories into system prompt
 	if a.memStore != nil && query != "" {
@@ -327,7 +330,9 @@ Behavior:
 func (a *AgentLoop) handleCommand(ctx context.Context, msg bus.InboundMessage) {
 	var response string
 
-	switch msg.Content {
+	cmd := strings.Fields(msg.Content)
+
+	switch cmd[0] {
 	case "/status":
 		providerName := "none"
 		if a.provider != nil {
@@ -340,6 +345,21 @@ func (a *AgentLoop) handleCommand(ctx context.Context, msg bus.InboundMessage) {
 		}
 		historyCount := len(a.history)
 		response = fmt.Sprintf("Aeon Status:\n  Provider: %s\n  Tools: %d loaded\n  Active tasks: %d\n  Session: %d messages", providerName, toolCount, taskCount, historyCount)
+	case "/model":
+		if chain, ok := a.provider.(*providers.ProviderChain); ok {
+			if len(cmd) < 2 {
+				response = fmt.Sprintf("Current: %s\nAvailable: %s\nUsage: /model <name>",
+					chain.PrimaryName(), strings.Join(chain.AvailableNames(), ", "))
+			} else if err := chain.SwitchTo(cmd[1]); err != nil {
+				response = err.Error()
+			} else {
+				// Clear history to avoid cross-provider tool call ID mismatches
+				a.clearHistory(ctx)
+				response = fmt.Sprintf("Switched to %s (conversation reset)", chain.PrimaryName())
+			}
+		} else {
+			response = "Single provider mode — no switching available."
+		}
 	case "/skills":
 		response = "Use find_skills tool to list installed skills."
 	case "/new":
@@ -357,9 +377,9 @@ func (a *AgentLoop) handleCommand(ctx context.Context, msg bus.InboundMessage) {
 			response = "No active tasks to stop."
 		}
 	case "/help":
-		response = "Commands:\n  /status  — Show system status\n  /skills  — List evolved skills\n  /new     — Start fresh conversation\n  /stop    — Cancel running tasks\n  /help    — Show this help"
+		response = "Commands:\n  /status  — Show system status\n  /model   — Switch AI provider\n  /skills  — List evolved skills\n  /new     — Start fresh conversation\n  /stop    — Cancel running tasks\n  /help    — Show this help"
 	default:
-		response = fmt.Sprintf("Unknown command: %s. Type /help for available commands.", msg.Content)
+		response = fmt.Sprintf("Unknown command: %s. Type /help for available commands.", cmd[0])
 	}
 
 	a.bus.Send(bus.OutboundMessage{
