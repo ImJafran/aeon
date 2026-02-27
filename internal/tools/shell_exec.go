@@ -14,12 +14,22 @@ import (
 const maxOutputLen = 10000
 const defaultShellTimeout = 30 * time.Second
 
+type SecurityChecker interface {
+	CheckCommand(command string) (int, string) // 0=allowed, 1=denied, 2=needs_approval
+	ScrubCredentials(text string) string
+}
+
 type ShellExecTool struct {
-	timeout time.Duration
+	timeout  time.Duration
+	security SecurityChecker
 }
 
 func NewShellExec() *ShellExecTool {
 	return &ShellExecTool{timeout: defaultShellTimeout}
+}
+
+func (t *ShellExecTool) SetSecurity(s SecurityChecker) {
+	t.security = s
 }
 
 func (t *ShellExecTool) Name() string        { return "shell_exec" }
@@ -54,6 +64,20 @@ func (t *ShellExecTool) Execute(ctx context.Context, params json.RawMessage) (To
 
 	if p.Command == "" {
 		return ToolResult{ForLLM: "Error: command is required"}, nil
+	}
+
+	// Security check
+	if t.security != nil {
+		decision, reason := t.security.CheckCommand(p.Command)
+		switch decision {
+		case 1: // Denied
+			return ToolResult{ForLLM: fmt.Sprintf("BLOCKED: %s", reason)}, nil
+		case 2: // NeedsApproval
+			return ToolResult{
+				ForLLM:  fmt.Sprintf("REQUIRES APPROVAL: %s\nCommand: %s", reason, p.Command),
+				ForUser: fmt.Sprintf("⚠️ Command requires approval: %s\nReason: %s", p.Command, reason),
+			}, nil
+		}
 	}
 
 	timeout := t.timeout

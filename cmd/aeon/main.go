@@ -16,6 +16,7 @@ import (
 	"github.com/jafran/aeon/internal/channels"
 	"github.com/jafran/aeon/internal/config"
 	"github.com/jafran/aeon/internal/providers"
+	"github.com/jafran/aeon/internal/security"
 	"github.com/jafran/aeon/internal/tools"
 )
 
@@ -168,9 +169,14 @@ func runInteractive() {
 	// Initialize message bus
 	msgBus := bus.New(64)
 
+	// Initialize security policy
+	secPolicy := security.NewPolicy(cfg.Security.DenyPatterns, cfg.Security.AllowedPaths)
+	secAdapter := security.NewAdapter(secPolicy)
+
 	// Initialize tool registry with DNA tools
 	registry := tools.NewRegistry()
-	tools.RegisterDNATools(registry)
+	shellExec := tools.RegisterDNATools(registry)
+	shellExec.SetSecurity(secAdapter)
 	logger.Info("DNA tools registered", "count", registry.Count())
 
 	// Initialize provider chain
@@ -179,8 +185,9 @@ func runInteractive() {
 		logger.Warn("no provider available, running in echo mode", "error", err)
 	}
 
-	// Initialize agent loop
+	// Initialize agent loop with credential scrubbing
 	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
+	loop.SetScrubber(secAdapter)
 
 	// Start CLI channel
 	cli := channels.NewCLI()

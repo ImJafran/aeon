@@ -11,10 +11,16 @@ import (
 	"github.com/jafran/aeon/internal/tools"
 )
 
+// CredentialScrubber scrubs sensitive data from tool output before it enters conversation history.
+type CredentialScrubber interface {
+	ScrubCredentials(text string) string
+}
+
 type AgentLoop struct {
 	bus      *bus.MessageBus
 	provider providers.Provider
 	registry *tools.Registry
+	scrubber CredentialScrubber
 	logger   *slog.Logger
 }
 
@@ -25,6 +31,10 @@ func NewAgentLoop(b *bus.MessageBus, provider providers.Provider, registry *tool
 		registry: registry,
 		logger:   logger,
 	}
+}
+
+func (a *AgentLoop) SetScrubber(s CredentialScrubber) {
+	a.scrubber = s
 }
 
 func (a *AgentLoop) Run(ctx context.Context) {
@@ -107,9 +117,14 @@ func (a *AgentLoop) runAgentLoop(ctx context.Context, msg bus.InboundMessage) {
 			// Execute tools (parallel for independent calls)
 			results := a.executeTools(ctx, resp.ToolCalls)
 			for _, result := range results {
+				// Scrub credentials from tool output before it enters conversation
+				forLLM := result.ForLLM
+				if a.scrubber != nil {
+					forLLM = a.scrubber.ScrubCredentials(forLLM)
+				}
 				messages = append(messages, providers.Message{
 					Role:       "tool",
-					Content:    result.ForLLM,
+					Content:    forLLM,
 					ToolCallID: result.ToolCallID,
 				})
 
