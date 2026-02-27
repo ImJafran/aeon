@@ -152,8 +152,51 @@ func TestBuildContextFromMemory(t *testing.T) {
 
 	store.MemStore(ctx, CategoryCore, "The database password is in /etc/secrets", "db,password")
 
-	context := store.BuildContextFromMemory(ctx, "database password")
-	if context == "" {
+	result := store.BuildContextFromMemory(ctx, "database password")
+	if result == "" {
 		t.Error("expected non-empty context")
 	}
+}
+
+func TestBuildContextFromMemory_StopWordsOnly(t *testing.T) {
+	store := setupTestStore(t)
+	ctx := context.Background()
+
+	// Store core memories (like a user's identity)
+	store.MemStore(ctx, CategoryCore, "The user's name is Jafran", "name,user")
+	store.MemStore(ctx, CategoryCore, "Jafran lives in Rajshahi, Bangladesh", "location")
+
+	// "who am I" — all words are stop words, extractKeywords returns empty
+	// But core memories should still be injected
+	result := store.BuildContextFromMemory(ctx, "who am I")
+	if result == "" {
+		t.Error("expected core memories even when query has only stop words")
+	}
+	if !contains(result, "Jafran") {
+		t.Errorf("expected memory about Jafran, got: %s", result)
+	}
+}
+
+func TestBuildContextFromMemory_EmptyDB(t *testing.T) {
+	store := setupTestStore(t)
+	ctx := context.Background()
+
+	// No memories stored — should return empty
+	result := store.BuildContextFromMemory(ctx, "who am I")
+	if result != "" {
+		t.Errorf("expected empty context for empty DB, got: %s", result)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
+}
+
+func containsSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

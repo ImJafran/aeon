@@ -140,14 +140,31 @@ func (s *Store) Recall(_ context.Context, query string, limit int) ([]Entry, err
 }
 
 func (s *Store) recallLike(query string, limit int) ([]Entry, error) {
-	pattern := "%" + query + "%"
-	rows, err := s.db.Query(`
+	// Build OR-ed LIKE clauses for each keyword
+	keywords := extractKeywords(query)
+	if len(keywords) == 0 {
+		// Fall back to full query if no keywords extracted
+		keywords = []string{query}
+	}
+
+	var conditions []string
+	var args []any
+	for _, kw := range keywords {
+		pattern := "%" + kw + "%"
+		conditions = append(conditions, "(content LIKE ? OR tags LIKE ?)")
+		args = append(args, pattern, pattern)
+	}
+	args = append(args, limit)
+
+	q := fmt.Sprintf(`
 		SELECT id, category, content, tags, created_at, accessed_at
 		FROM memories
-		WHERE content LIKE ? OR tags LIKE ?
+		WHERE %s
 		ORDER BY accessed_at DESC
 		LIMIT ?
-	`, pattern, pattern, limit)
+	`, strings.Join(conditions, " OR "))
+
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +239,19 @@ func (s *Store) SaveHistory(_ context.Context, sessionID, role, content string) 
 	return err
 }
 
+// GetLatestSessionID returns the most recent session ID from conversation history.
+func (s *Store) GetLatestSessionID() (string, error) {
+	var sessionID string
+	err := s.db.QueryRow(`
+		SELECT session_id FROM conversation_history
+		ORDER BY id DESC LIMIT 1
+	`).Scan(&sessionID)
+	if err != nil {
+		return "", err
+	}
+	return sessionID, nil
+}
+
 // GetHistory returns conversation history for a session.
 func (s *Store) GetHistory(_ context.Context, sessionID string, limit int) ([]map[string]string, error) {
 	if limit <= 0 {
@@ -291,22 +321,88 @@ func truncate(s string, maxLen int) string {
 }
 
 // BuildContextFromMemory retrieves relevant memories for the current query and formats them for the system prompt.
+// Core memories are ALWAYS included. Additional memories are keyword-matched from the query.
 func (s *Store) BuildContextFromMemory(ctx context.Context, query string) string {
-	if query == "" {
-		return ""
+	seen := map[int64]bool{}
+
+	// Always load core memories — these are identity-critical
+	coreEntries, _ := s.List(ctx, CategoryCore, 10)
+
+	// Search for query-relevant memories if we have keywords
+	var relevantEntries []Entry
+	if query != "" {
+		keywords := extractKeywords(query)
+		if len(keywords) > 0 {
+			ftsQuery := strings.Join(keywords, " OR ")
+			relevantEntries, _ = s.Recall(ctx, ftsQuery, 5)
+		}
 	}
 
-	// Get relevant memories
-	entries, err := s.Recall(ctx, query, 5)
-	if err != nil || len(entries) == 0 {
+	// If no keywords matched and no core memories, load recent memories as fallback
+	if len(coreEntries) == 0 && len(relevantEntries) == 0 {
+		recentEntries, _ := s.List(ctx, "", 5)
+		if len(recentEntries) == 0 {
+			return ""
+		}
+		relevantEntries = recentEntries
+	}
+
+	// Merge: core first, then relevant (deduplicated)
+	var all []Entry
+	for _, e := range coreEntries {
+		seen[e.ID] = true
+		all = append(all, e)
+	}
+	for _, e := range relevantEntries {
+		if !seen[e.ID] {
+			seen[e.ID] = true
+			all = append(all, e)
+		}
+	}
+
+	if len(all) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString("<relevant_memories>\n")
-	for _, e := range entries {
+	for _, e := range all {
 		b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Category, e.Content))
 	}
 	b.WriteString("</relevant_memories>\n")
 	return b.String()
+}
+
+// extractKeywords pulls meaningful words from a natural-language query for FTS5 search.
+func extractKeywords(text string) []string {
+	// Common stop words to filter out
+	stop := map[string]bool{
+		"a": true, "an": true, "the": true, "is": true, "are": true, "was": true, "were": true,
+		"be": true, "been": true, "being": true, "have": true, "has": true, "had": true,
+		"do": true, "does": true, "did": true, "will": true, "would": true, "could": true,
+		"should": true, "may": true, "might": true, "can": true, "shall": true,
+		"i": true, "me": true, "my": true, "we": true, "our": true, "you": true, "your": true,
+		"he": true, "she": true, "it": true, "they": true, "them": true, "their": true,
+		"this": true, "that": true, "these": true, "those": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true, "with": true,
+		"by": true, "from": true, "about": true, "into": true, "through": true,
+		"and": true, "or": true, "but": true, "not": true, "no": true, "if": true,
+		"what": true, "when": true, "where": true, "how": true, "who": true, "which": true, "why": true,
+		"just": true, "also": true, "than": true, "then": true, "so": true, "very": true,
+		"hey": true, "hi": true, "hello": true, "please": true, "thanks": true,
+	}
+
+	words := strings.Fields(strings.ToLower(text))
+	var keywords []string
+	seen := map[string]bool{}
+	for _, w := range words {
+		// Strip punctuation from edges
+		w = strings.Trim(w, ".,!?;:\"'()[]{}")
+		if len(w) < 2 || stop[w] || seen[w] {
+			continue
+		}
+		seen[w] = true
+		keywords = append(keywords, w)
+	}
+	return keywords
 }
