@@ -21,6 +21,7 @@ type AgentLoop struct {
 	provider providers.Provider
 	registry *tools.Registry
 	scrubber CredentialScrubber
+	subMgr   *SubagentManager
 	logger   *slog.Logger
 }
 
@@ -35,6 +36,10 @@ func NewAgentLoop(b *bus.MessageBus, provider providers.Provider, registry *tool
 
 func (a *AgentLoop) SetScrubber(s CredentialScrubber) {
 	a.scrubber = s
+}
+
+func (a *AgentLoop) SetSubagentManager(m *SubagentManager) {
+	a.subMgr = m
 }
 
 func (a *AgentLoop) Run(ctx context.Context) {
@@ -217,13 +222,26 @@ func (a *AgentLoop) handleCommand(msg bus.InboundMessage) {
 			providerName = a.provider.Name()
 		}
 		toolCount := len(a.registry.ToolDefs())
-		response = fmt.Sprintf("Aeon Status:\n  Provider: %s\n  Tools: %d loaded", providerName, toolCount)
+		taskCount := 0
+		if a.subMgr != nil {
+			taskCount = a.subMgr.Count()
+		}
+		response = fmt.Sprintf("Aeon Status:\n  Provider: %s\n  Tools: %d loaded\n  Active tasks: %d", providerName, toolCount, taskCount)
 	case "/skills":
-		response = "Skills: none loaded (Phase 6)"
+		response = "Use find_skills tool to list installed skills."
 	case "/new":
 		response = "Conversation cleared."
 	case "/stop":
-		response = "No active tasks to stop."
+		if a.subMgr != nil {
+			count := a.subMgr.StopAll()
+			if count > 0 {
+				response = fmt.Sprintf("Cancelled %d active task(s).", count)
+			} else {
+				response = "No active tasks to stop."
+			}
+		} else {
+			response = "No active tasks to stop."
+		}
 	case "/help":
 		response = "Commands:\n  /status  — Show system status\n  /skills  — List evolved skills\n  /new     — Start fresh conversation\n  /stop    — Cancel running tasks\n  /help    — Show this help"
 	default:

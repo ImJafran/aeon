@@ -218,9 +218,16 @@ func runInteractive() {
 		logger.Warn("no provider available, running in echo mode", "error", err)
 	}
 
+	// Initialize subagent manager
+	subMgr := agent.NewSubagentManager(provider, registry, msgBus, logger)
+	subMgr.SetScrubber(secAdapter)
+	registry.Register(tools.NewSpawnAgent(subMgr))
+	registry.Register(tools.NewListTasks(subMgr))
+
 	// Initialize agent loop with credential scrubbing
 	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
 	loop.SetScrubber(secAdapter)
+	loop.SetSubagentManager(subMgr)
 
 	// Print banner
 	providerCount := config.EnabledProviderCount(cfg)
