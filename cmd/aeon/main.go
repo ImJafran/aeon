@@ -15,6 +15,7 @@ import (
 	"github.com/jafran/aeon/internal/bus"
 	"github.com/jafran/aeon/internal/channels"
 	"github.com/jafran/aeon/internal/config"
+	"github.com/jafran/aeon/internal/memory"
 	"github.com/jafran/aeon/internal/providers"
 	"github.com/jafran/aeon/internal/security"
 	"github.com/jafran/aeon/internal/tools"
@@ -131,23 +132,6 @@ func runInteractive() {
 	}
 
 	home := config.AeonHome()
-	providerCount := config.EnabledProviderCount(cfg)
-
-	fmt.Printf("\n🌱 Aeon v%s — The Self-Evolving Kernel\n", version)
-	fmt.Printf("   Providers: %d configured\n", providerCount)
-
-	// Check if skills dir has anything
-	skillCount := 0
-	skillsDir := filepath.Join(home, "skills")
-	if entries, err := os.ReadDir(skillsDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				skillCount++
-			}
-		}
-	}
-	fmt.Printf("   Skills: %d loaded\n", skillCount)
-	fmt.Printf("   Home: %s\n\n", home)
 
 	// Setup context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -173,11 +157,27 @@ func runInteractive() {
 	secPolicy := security.NewPolicy(cfg.Security.DenyPatterns, cfg.Security.AllowedPaths)
 	secAdapter := security.NewAdapter(secPolicy)
 
+	// Initialize memory store
+	dbPath := filepath.Join(home, "aeon.db")
+	memStore, err := memory.NewStore(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
+		os.Exit(1)
+	}
+	defer memStore.Close()
+
+	memCount, _ := memStore.Count(context.Background())
+	logger.Info("memory store ready", "path", dbPath, "entries", memCount)
+
 	// Initialize tool registry with DNA tools
 	registry := tools.NewRegistry()
 	shellExec := tools.RegisterDNATools(registry)
 	shellExec.SetSecurity(secAdapter)
-	logger.Info("DNA tools registered", "count", registry.Count())
+
+	// Register memory tools
+	registry.Register(tools.NewMemoryStore(memStore))
+	registry.Register(tools.NewMemoryRecall(memStore))
+	logger.Info("tools registered", "count", registry.Count())
 
 	// Initialize provider chain
 	provider, err := providers.FromConfig(cfg, logger)
@@ -188,6 +188,24 @@ func runInteractive() {
 	// Initialize agent loop with credential scrubbing
 	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
 	loop.SetScrubber(secAdapter)
+
+	// Print banner
+	providerCount := config.EnabledProviderCount(cfg)
+	skillCount := 0
+	skillsDir := filepath.Join(home, "skills")
+	if entries, err := os.ReadDir(skillsDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				skillCount++
+			}
+		}
+	}
+	fmt.Printf("\n🌱 Aeon v%s — The Self-Evolving Kernel\n", version)
+	fmt.Printf("   Providers: %d configured\n", providerCount)
+	fmt.Printf("   Tools: %d loaded\n", registry.Count())
+	fmt.Printf("   Skills: %d loaded\n", skillCount)
+	fmt.Printf("   Memory: %d entries\n", memCount)
+	fmt.Printf("   Home: %s\n\n", home)
 
 	// Start CLI channel
 	cli := channels.NewCLI()
