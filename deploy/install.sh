@@ -94,16 +94,18 @@ if [ -f "$GOBIN/aeon" ]; then
     chmod +x "$INSTALL_DIR/aeon"
     echo "  Installed to $INSTALL_DIR/aeon"
 
-    # Also install to /usr/local/bin so 'aeon' works globally
+    # Try to also install to /usr/local/bin (optional, non-fatal)
     if [ "$INSTALL_DIR" != "/usr/local/bin" ]; then
         if [ -w "/usr/local/bin" ]; then
-            cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon
-            chmod +x /usr/local/bin/aeon
+            cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon && chmod +x /usr/local/bin/aeon \
+                && echo "  Linked to /usr/local/bin/aeon"
+        elif command -v sudo &> /dev/null; then
+            sudo cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon && sudo chmod +x /usr/local/bin/aeon \
+                && echo "  Linked to /usr/local/bin/aeon" \
+                || echo "  Skipped /usr/local/bin (no permission). 'aeon' works from $INSTALL_DIR"
         else
-            sudo cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon
-            sudo chmod +x /usr/local/bin/aeon
+            echo "  Skipped /usr/local/bin (no sudo). 'aeon' works from $INSTALL_DIR"
         fi
-        echo "  Linked to /usr/local/bin/aeon"
     fi
 fi
 
