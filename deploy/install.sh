@@ -98,10 +98,11 @@ if [ -f "$GOBIN/aeon" ]; then
     if [ "$INSTALL_DIR" != "/usr/local/bin" ]; then
         if [ -w "/usr/local/bin" ]; then
             cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon
+            chmod +x /usr/local/bin/aeon
         else
             sudo cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon
+            sudo chmod +x /usr/local/bin/aeon
         fi
-        chmod +x /usr/local/bin/aeon
         echo "  Linked to /usr/local/bin/aeon"
     fi
 fi
