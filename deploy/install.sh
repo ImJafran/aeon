@@ -5,8 +5,8 @@ set -e
 # Usage: curl -sSL https://raw.githubusercontent.com/ImJafran/aeon/main/deploy/install.sh | bash
 
 REPO="ImJafran/aeon"
-VERSION="${AEON_VERSION:-latest}"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+GO_VERSION="1.24.1"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 AEON_HOME="${AEON_HOME:-$HOME/.aeon}"
 
 echo ""
@@ -19,9 +19,9 @@ OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
 case "$ARCH" in
-    x86_64)  ARCH="amd64" ;;
-    aarch64) ARCH="arm64" ;;
-    arm64)   ARCH="arm64" ;;
+    x86_64)  GOARCH="amd64" ;;
+    aarch64) GOARCH="arm64" ;;
+    arm64)   GOARCH="arm64" ;;
     *)       echo "  Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
@@ -30,63 +30,80 @@ case "$OS" in
     *)  echo "  Unsupported OS: $OS"; exit 1 ;;
 esac
 
-echo "  OS:   $OS/$ARCH"
+echo "  OS:   $OS/$GOARCH"
 
-# Try go install first (preferred)
-if command -v go &> /dev/null; then
-    GO_VER=$(go version | awk '{print $3}' | sed 's/go//')
-    echo "  Go:   $GO_VER"
-    echo ""
-    echo "  Installing via 'go install'..."
-    CGO_ENABLED=0 go install github.com/$REPO/cmd/aeon@latest
-
-    # go install puts it in GOBIN or GOPATH/bin
-    GOBIN=$(go env GOBIN)
-    [ -z "$GOBIN" ] && GOBIN="$(go env GOPATH)/bin"
-
-    if [ -f "$GOBIN/aeon" ]; then
-        echo "  Installed to $GOBIN/aeon"
-        # Optionally copy to INSTALL_DIR if it's different
-        if [ "$GOBIN" != "$INSTALL_DIR" ] && [ "$INSTALL_DIR" = "/usr/local/bin" ]; then
-            echo "  (also available at $GOBIN/aeon — add \$GOPATH/bin to your PATH)"
-        fi
-    fi
-else
-    echo "  Go:   not found"
-    echo ""
-    echo "  Building from source..."
-
-    # Check for git
-    if ! command -v git &> /dev/null; then
-        echo "  Error: git is required. Install git and try again."
-        exit 1
-    fi
+# Install Go if not present
+install_go() {
+    echo "  Go:   not found — installing Go $GO_VERSION..."
+    GO_TAR="go${GO_VERSION}.${OS}-${GOARCH}.tar.gz"
+    GO_URL="https://go.dev/dl/$GO_TAR"
 
     TEMP_DIR=$(mktemp -d)
     trap "rm -rf $TEMP_DIR" EXIT
 
-    git clone --depth 1 https://github.com/$REPO.git "$TEMP_DIR"
-    cd "$TEMP_DIR"
+    curl -sSL "$GO_URL" -o "$TEMP_DIR/$GO_TAR"
 
-    if ! command -v go &> /dev/null; then
-        echo ""
-        echo "  Error: Go 1.24+ is required to build Aeon."
-        echo "  Install Go from https://go.dev/dl/ and try again."
-        echo ""
-        echo "  Or use 'go install':"
-        echo "    go install github.com/$REPO/cmd/aeon@latest"
-        exit 1
-    fi
-
-    CGO_ENABLED=0 go build -ldflags="-s -w" -o aeon ./cmd/aeon
-
-    echo "  Installing to $INSTALL_DIR..."
-    if [ -w "$INSTALL_DIR" ]; then
-        cp aeon "$INSTALL_DIR/aeon"
+    if [ -w "/usr/local" ]; then
+        tar -C /usr/local -xzf "$TEMP_DIR/$GO_TAR"
     else
-        sudo cp aeon "$INSTALL_DIR/aeon"
+        sudo tar -C /usr/local -xzf "$TEMP_DIR/$GO_TAR"
     fi
+
+    export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+
+    # Add to shell profile if not already there
+    SHELL_RC="$HOME/.bashrc"
+    [ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.zshrc"
+
+    if ! grep -q '/usr/local/go/bin' "$SHELL_RC" 2>/dev/null; then
+        echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> "$SHELL_RC"
+        echo "  Added Go to PATH in $SHELL_RC"
+    fi
+
+    echo "  Go:   $(go version | awk '{print $3}') installed"
+}
+
+if command -v go &> /dev/null; then
+    echo "  Go:   $(go version | awk '{print $3}')"
+else
+    install_go
+fi
+
+# Ensure INSTALL_DIR exists and is in PATH
+mkdir -p "$INSTALL_DIR"
+if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
+    SHELL_RC="$HOME/.bashrc"
+    [ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.zshrc"
+    if ! grep -q "$INSTALL_DIR" "$SHELL_RC" 2>/dev/null; then
+        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$SHELL_RC"
+        echo "  Added $INSTALL_DIR to PATH in $SHELL_RC"
+    fi
+    export PATH="$PATH:$INSTALL_DIR"
+fi
+
+echo ""
+echo "  Installing Aeon..."
+CGO_ENABLED=0 go install -ldflags="-s -w" github.com/$REPO/cmd/aeon@latest
+
+# Copy from GOBIN to INSTALL_DIR
+GOBIN=$(go env GOBIN)
+[ -z "$GOBIN" ] && GOBIN="$(go env GOPATH)/bin"
+
+if [ -f "$GOBIN/aeon" ]; then
+    cp "$GOBIN/aeon" "$INSTALL_DIR/aeon"
     chmod +x "$INSTALL_DIR/aeon"
+    echo "  Installed to $INSTALL_DIR/aeon"
+
+    # Also install to /usr/local/bin so 'aeon' works globally
+    if [ "$INSTALL_DIR" != "/usr/local/bin" ]; then
+        if [ -w "/usr/local/bin" ]; then
+            cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon
+        else
+            sudo cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon
+        fi
+        chmod +x /usr/local/bin/aeon
+        echo "  Linked to /usr/local/bin/aeon"
+    fi
 fi
 
 echo ""
@@ -95,7 +112,7 @@ echo ""
 if [ ! -f "$AEON_HOME/config.yaml" ]; then
     echo "  Running first-time setup..."
     echo ""
-    aeon init
+    "$INSTALL_DIR/aeon" init
 else
     echo "  Config already exists at $AEON_HOME/config.yaml"
 fi
@@ -103,10 +120,11 @@ fi
 echo ""
 echo "  Installation complete!"
 echo ""
-echo "  Next steps:"
-echo "    aeon init     # first-time setup (if not done)"
-echo "    aeon          # interactive CLI mode"
-echo "    aeon serve    # daemon mode (Telegram bot)"
+echo "  Commands:"
+echo "    aeon            # interactive CLI"
+echo "    aeon serve      # daemon mode (Telegram bot)"
+echo "    aeon init       # re-run setup"
+echo "    aeon uninstall  # remove everything"
 echo ""
 echo "  Docs: https://github.com/$REPO"
 echo ""

@@ -40,7 +40,24 @@ It starts with core tools (shell, files, memory, cron) and **grows by writing it
 
 ## Install
 
-### From source (recommended)
+```bash
+curl -sSL https://raw.githubusercontent.com/ImJafran/aeon/main/deploy/install.sh | bash
+```
+
+The script installs Go (if needed), builds Aeon, and runs `aeon init` to set up everything.
+
+<details>
+<summary>Other install methods</summary>
+
+### Using `go install`
+
+Requires [Go 1.24+](https://go.dev/dl/).
+
+```bash
+go install github.com/ImJafran/aeon/cmd/aeon@latest
+```
+
+### From source
 
 ```bash
 git clone https://github.com/ImJafran/aeon.git
@@ -48,19 +65,7 @@ cd aeon
 make install    # builds + installs to ~/.local/bin/aeon
 ```
 
-### Using `go install`
-
-```bash
-go install github.com/ImJafran/aeon/cmd/aeon@latest
-```
-
-### One-liner
-
-```bash
-curl -sSL https://raw.githubusercontent.com/ImJafran/aeon/main/deploy/install.sh | bash
-```
-
-Only requirement is **Go 1.24+** for building. `aeon init` handles everything else.
+</details>
 
 ---
 
