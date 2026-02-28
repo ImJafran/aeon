@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jafran/aeon/internal/providers"
+	"github.com/ImJafran/aeon/internal/providers"
 )
 
 const defaultToolTimeout = 60 * time.Second

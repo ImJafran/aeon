@@ -1,180 +1,214 @@
-# Aeon
+<h1 align="center">Aeon</h1>
 
-A self-evolving AI agent that lives on your server. Single Go binary, zero dependencies, talks to you through Telegram.
+<p align="center">
+  <strong>A self-evolving, system-level AI agent that lives inside your kernel.</strong><br>
+  Not a chatbot. Not an informer. A virtual sysadmin that acts on your behalf.
+</p>
 
-Aeon starts with a fixed set of DNA tools (shell, files, memory, scheduling) and grows by writing its own Python skills — tested, registered, and managed autonomously.
+<p align="center">
+  <a href="https://github.com/ImJafran/aeon/releases"><img src="https://img.shields.io/badge/version-0.0.1--beta-blue?style=flat-square" alt="Version" /></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.24+" /></a>
+  <a href="https://www.sqlite.org"><img src="https://img.shields.io/badge/SQLite-FTS5-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite FTS5" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License" /></a>
+</p>
 
-## How it works
+<p align="center">
+  <a href="#install">Install</a> &middot;
+  <a href="#get-started">Get Started</a> &middot;
+  <a href="#configuration">Configuration</a> &middot;
+  <a href="#commands">Commands</a> &middot;
+  <a href="#deployment">Deployment</a> &middot;
+  <a href="#uninstall">Uninstall</a>
+</p>
 
-```
-You (Telegram/CLI) → Message Bus → Agent Loop → LLM Provider → Tool Execution
-                                                                      ↓
-                                                              Skills / Shell / Memory / Cron
-```
+<p align="center">
+  <a href="ENGINEERING.md">Engineering Deep Dive</a> &middot;
+  <a href="DEVELOPMENT.md">Development</a>
+</p>
 
-- **Provider-agnostic** — Anthropic, Gemini, OpenAI-compatible (Ollama), or Claude CLI
-- **Multi-provider routing** — primary, fast, fallback tiers with automatic failover
-- **Persistent memory** — SQLite with FTS5 search, survives restarts
-- **Self-evolving skills** — LLM writes Python/Bash scripts, validates them, registers as tools
-- **Scheduling** — recurring cron jobs + one-shot reminders (`in 10m`, `at 4:50pm`)
-- **Voice support** — Telegram voice messages transcribed via Gemini
+---
 
-## Quick Start
+> **Beta:** v0.0.1-beta. APIs and config format may change.
 
-### Prerequisites
+## What is Aeon?
 
-- Go 1.24+ (build only)
-- Docker + Docker Compose (recommended for dev)
+Aeon is a **system-level AI agent** with deep Linux/Unix integration. It has root access guarded by a sandboxed security policy. It's self-evolving, self-learning, and self-correcting — a general-purpose agent that **does things**, not a chatbot that talks about them.
 
-### Setup
+It starts with core tools (shell, files, memory, cron) and **grows by writing its own Python skills**. Single Go binary, no CGO, no runtime dependencies. Runs as a Telegram bot or local CLI.
+
+---
+
+## Install
+
+### From source (recommended)
 
 ```bash
-git clone https://github.com/jafran/aeon.git
+git clone https://github.com/ImJafran/aeon.git
 cd aeon
-
-# Create config (see config section below)
-cp config.example.yaml config.yaml
-# Edit config.yaml with your API keys and Telegram token
-
-# Run tests
-docker compose run --rm test
-
-# Start (Telegram daemon)
-docker compose up telegram -d
-
-# Check logs
-docker compose logs telegram --tail 50
+make install    # builds + installs to ~/.local/bin/aeon
 ```
 
-### Without Docker
+### Using `go install`
 
 ```bash
-make build
-./bin/aeon init
-./bin/aeon          # interactive CLI
-./bin/aeon serve    # Telegram daemon
+go install github.com/ImJafran/aeon/cmd/aeon@latest
 ```
+
+### One-liner
+
+```bash
+curl -sSL https://raw.githubusercontent.com/ImJafran/aeon/main/deploy/install.sh | bash
+```
+
+Only requirement is **Go 1.24+** for building. `aeon init` handles everything else.
+
+---
+
+## Get Started
+
+```bash
+# 1. First-time setup — installs Python, ffmpeg, creates config
+aeon init
+
+# 2. Add your API keys
+nano ~/.aeon/config.yaml
+
+# 3. Run
+aeon              # interactive CLI
+aeon serve        # Telegram daemon
+```
+
+That's it. `aeon init` detects your system, installs missing dependencies, sets up the workspace, and generates a config file.
+
+```
+$ aeon init
+
+🌱 Aeon v0.0.1-beta — First-Time Setup
+========================================
+
+[1/4] Checking system...
+  ✓ OS: linux (amd64)
+  ✓ SQLite: compiled into binary
+  ✗ Python: not found
+  ✗ ffmpeg: not found
+
+[2/4] Installing dependencies...
+  ✓ Python installed: Python 3.12.3
+  ✓ ffmpeg installed
+
+[3/4] Detecting LLM providers...
+  ✓ ANTHROPIC_API_KEY set
+  ✓ GEMINI_API_KEY set
+
+[4/4] Setting up workspace...
+  ✓ Workspace created at ~/.aeon
+  ✓ Config written to ~/.aeon/config.yaml
+  ✓ Base Python environment ready
+
+✓ Setup complete!
+```
+
+---
 
 ## Configuration
 
-All config lives in `config.yaml` (YAML, gitignored). No `.env` files.
+All config lives in `~/.aeon/config.yaml`. See [`config.example.yaml`](config.example.yaml) for the full template.
 
 ```yaml
 provider:
+  zai:
+    enabled: true
+    api_key: your-zai-api-key
+    default_model: glm-4.7
   anthropic:
     enabled: true
-    api_key: sk-ant-...
+    api_key: sk-ant-your-key
     default_model: claude-sonnet-4-6
-    fast_model: claude-haiku-4-5-20251001
   gemini:
     enabled: true
-    api_key: AIza...
+    api_key: your-gemini-key
     default_model: gemini-2.5-flash-lite
-    audio_model: gemini-2.5-flash-native-audio-preview-12-2025
-    tts_model: gemini-2.5-flash-preview-tts
 
 channels:
   telegram:
     enabled: true
-    bot_token: "123456:ABC..."
-    allowed_users: [your_telegram_id]
+    bot_token: "your-telegram-bot-token"
+    allowed_users: [your_telegram_user_id]
 
 routing:
-  primary: gemini
+  primary: zai
   fast: anthropic_fast
-  fallback: anthropic
-
-agent:
-  system_prompt: |
-    You are Aeon, a persistent AI assistant...
+  fallback: gemini
 ```
+
+### Supported Providers
+
+| Provider | Notes |
+|---|---|
+| **Z.ai** | GLM models via OpenAI-compatible API (default) |
+| **Anthropic** | Claude models via native Messages API |
+| **Gemini** | Also handles voice transcription and TTS |
+| **Ollama** | Fully offline, local models |
+| **Any OpenAI-compatible** | LM Studio, vLLM, OpenRouter, etc. |
+
+### Telegram Bot Setup
+
+1. Message [@BotFather](https://t.me/BotFather) -> `/newbot`
+2. Copy the token into `config.yaml` -> `channels.telegram.bot_token`
+3. Get your user ID from [@userinfobot](https://t.me/userinfobot)
+4. Add it to `channels.telegram.allowed_users`
+5. Restart Aeon
+
+---
 
 ## Commands
 
-In Telegram or CLI:
-
 | Command | Description |
-|---------|-------------|
+|---|---|
 | `/status` | System info — provider, tools, memory, active tasks |
 | `/model` | Switch LLM provider at runtime |
-| `/model gemini` | Switch to Gemini |
-| `/new` | Clear conversation history |
+| `/model gemini` | Switch to a specific provider |
+| `/new` | Clear conversation history (memory persists) |
 | `/stop` | Cancel running tasks |
-| `/help` | List commands |
+| `/skills` | List evolved skills |
+| `/help` | List available commands |
 
-## Architecture
-
-```
-cmd/aeon/main.go          Entrypoint (interactive, serve, init)
-internal/
-  agent/loop.go            Core agent loop — message → LLM → tools → response
-  agent/subagent.go        Parallel task delegation
-  providers/               LLM providers (Anthropic, Gemini/OpenAI-compat, chain)
-  channels/telegram.go     Telegram bot (long-polling, typing indicator, voice)
-  channels/transcribe.go   Voice transcription via Gemini
-  channels/cli.go          Local terminal interface
-  tools/                   DNA tools (shell, files, memory, cron, skills)
-  memory/store.go          SQLite FTS5 memory + conversation history
-  scheduler/scheduler.go   Cron jobs + one-shot reminders
-  skills/                  Skill loader and venv management
-  security/                Command deny-list, path containment, credential scrubbing
-  config/config.go         YAML config loading
-  bus/                     Message bus (channels ↔ agent loop)
-```
-
-### DNA Tools (built-in)
-
-| Tool | What it does |
-|------|-------------|
-| `shell_exec` | Run shell commands (with deny-pattern filter) |
-| `file_read` / `file_write` / `file_edit` | File operations |
-| `memory_store` / `memory_recall` | Long-term memory (FTS5 search) |
-| `cron_manage` | Schedule recurring jobs or one-shot reminders |
-| `skill_factory` | Create new Python/Bash skills |
-| `find_skills` / `read_skill` / `run_skill` | Manage evolved skills |
-| `spawn_agent` / `list_tasks` | Parallel subagent delegation |
-
-### Evolved Skills (AI-generated)
-
-Stored in `~/.aeon/skills/`. Each skill is a directory with:
-- `SKILL.md` — metadata (name, description, params, deps)
-- `main.py` or `main.sh` — entry point
-- `lib/` — extra pip dependencies (overlay on shared base venv)
-
-Skills receive JSON on stdin, return JSON on stdout. Auto-disabled after 3 consecutive failures.
-
-## Development
-
-```bash
-make build          # build binary
-make test           # run tests
-make build-linux    # cross-compile for Linux amd64/arm64
-make lint           # golangci-lint
-
-# Docker
-docker compose run --rm test       # tests in container
-docker compose up telegram -d      # start bot
-docker compose logs telegram -f    # follow logs
-docker compose down                # stop
-```
+---
 
 ## Deployment
 
-Build for your VPS target and deploy the binary:
+### As a systemd Service
 
 ```bash
-make build-linux
-scp bin/aeon-linux-amd64 yourserver:/usr/local/bin/aeon
-ssh yourserver 'aeon init && aeon serve'
+sudo cp deploy/aeon.service /etc/systemd/system/
+sudo systemctl enable --now aeon
 ```
 
-Or use the Dockerfile for container deployment.
+---
 
-## Docs
+## Uninstall
 
-- [Architecture](ARCHITECTURE.md) — detailed system design
-- [User Guide](USER_GUIDE.md) — setup, config, daily usage, troubleshooting
+Removes the binary, `~/.aeon/` (config, database, skills, logs), and systemd service:
+
+```bash
+aeon uninstall
+```
+
+If you cloned the source, remove it separately: `rm -rf /path/to/aeon`
+
+---
+
+## More
+
+- **[Engineering Deep Dive](ENGINEERING.md)** — architecture, comparison with other agents, tools, skills, security model, performance, troubleshooting
+- **[Development](DEVELOPMENT.md)** — how to contribute, build & test, branch naming, PR workflow
+
+---
+
+## Author
+
+Created by **[Jafran Hasan](https://linkedin.com/in/iamjafran)** ([@imjafran](https://github.com/ImJafran))
 
 ## License
 
-MIT
+[MIT](LICENSE)

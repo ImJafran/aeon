@@ -12,6 +12,8 @@ const (
 	MediaText  MediaType = "text"
 	MediaImage MediaType = "image"
 	MediaAudio MediaType = "audio"
+
+	MetaStatus = "status" // metadata key for status update messages
 )
 
 type InboundMessage struct {

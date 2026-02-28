@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/bus"
 )
 
 // Transcriber converts audio to text.
@@ -21,10 +21,19 @@ type Transcriber interface {
 }
 
 const (
-	telegramAPIBase  = "https://api.telegram.org/bot"
-	maxMessageLen    = 4096
-	pollTimeout      = 30
+	TelegramChannelName = "telegram"
+	telegramAPIBase     = "https://api.telegram.org/bot"
+	maxMessageLen       = 4096
+	pollTimeout         = 30
 )
+
+// chatState tracks the per-chat typing/status indicator state.
+type chatState struct {
+	cancel      context.CancelFunc // cancels the typing goroutine
+	delayTimer  *time.Timer        // 2s grace period before showing anything
+	statusMsgID int                // Telegram message ID of the editable status message (0 = none)
+	phase       int                // 0=grace, 1=typing-only, 2=status-shown
+}
 
 // TelegramChannel implements the Channel interface for Telegram Bot API.
 type TelegramChannel struct {
@@ -36,9 +45,8 @@ type TelegramChannel struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 
-	typingMu     sync.Mutex
-	typingCancel map[string]context.CancelFunc // per-chat typing indicator cancellers
-	typingMsgID  map[string]int                // per-chat "Thinking..." message ID
+	stateMu    sync.Mutex
+	chatStates map[string]*chatState // per-chat state
 
 	transcriber Transcriber
 }
@@ -58,12 +66,11 @@ func NewTelegram(token string, allowedIDs []int64, logger *slog.Logger) *Telegra
 		client: &http.Client{
 			Timeout: time.Duration(pollTimeout+10) * time.Second,
 		},
-		typingCancel: make(map[string]context.CancelFunc),
-		typingMsgID:  make(map[string]int),
+		chatStates: make(map[string]*chatState),
 	}
 }
 
-func (t *TelegramChannel) Name() string { return "telegram" }
+func (t *TelegramChannel) Name() string { return TelegramChannelName }
 
 // Start begins polling and subscribes to outbound messages.
 func (t *TelegramChannel) Start(ctx context.Context, msgBus *bus.MessageBus) error {
@@ -88,7 +95,7 @@ func (t *TelegramChannel) Start(ctx context.Context, msgBus *bus.MessageBus) err
 			case <-pollCtx.Done():
 				return
 			case msg := <-sub:
-				if msg.Channel == "telegram" || msg.Channel == "" {
+				if msg.Channel == TelegramChannelName || msg.Channel == "" {
 					t.sendResponse(msg)
 				}
 			}
@@ -222,7 +229,7 @@ func (t *TelegramChannel) handleUpdate(_ context.Context, update tgUpdate) {
 
 	// Publish to bus
 	t.msgBus.Publish(bus.InboundMessage{
-		Channel:   "telegram",
+		Channel:   TelegramChannelName,
 		ChatID:    chatID,
 		UserID:    fmt.Sprintf("%d", msg.From.ID),
 		Content:   content,
@@ -241,11 +248,26 @@ func (t *TelegramChannel) handleCallback(cb *tgCallbackQuery) {
 	// Answer the callback to remove the loading indicator
 	t.answerCallback(cb.ID)
 
+	// Check allowed users (same as handleUpdate)
+	if len(t.allowedIDs) > 0 {
+		allowed := false
+		for _, id := range t.allowedIDs {
+			if cb.From.ID == id || cb.Message.Chat.ID == id {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			t.logger.Warn("unauthorized callback", "user_id", cb.From.ID, "chat_id", cb.Message.Chat.ID)
+			return
+		}
+	}
+
 	chatID := fmt.Sprintf("%d", cb.Message.Chat.ID)
 
 	// Publish as inbound message
 	t.msgBus.Publish(bus.InboundMessage{
-		Channel: "telegram",
+		Channel: TelegramChannelName,
 		ChatID:  chatID,
 		UserID:  fmt.Sprintf("%d", cb.From.ID),
 		Content: cb.Data,
@@ -257,20 +279,33 @@ func (t *TelegramChannel) handleCallback(cb *tgCallbackQuery) {
 
 // sendResponse sends an outbound message to Telegram.
 func (t *TelegramChannel) sendResponse(msg bus.OutboundMessage) {
-	if msg.ChatID == "" {
+	if msg.ChatID == "" || msg.Content == "" {
 		return
 	}
 
-	content := msg.Content
-	if content == "" {
+	// Status update — update the editable status message, don't send a new one
+	if msg.Metadata != nil && msg.Metadata[bus.MetaStatus] == "true" {
+		t.updateStatus(msg.ChatID, msg.Content)
 		return
 	}
 
-	// Stop typing indicator now that we have a response
+	// Real response — stop typing indicator
 	t.stopTyping(msg.ChatID)
 
+	// Approval request — render with inline keyboard buttons
+	if msg.Metadata != nil && msg.Metadata["approval"] == "true" {
+		buttons := [][]InlineButton{{
+			{Text: "Approve", Data: "/approve"},
+			{Text: "Deny", Data: "/deny"},
+		}}
+		if err := t.SendWithKeyboard(msg.ChatID, msg.Content, buttons); err != nil {
+			t.logger.Error("failed to send approval keyboard", "error", err, "chat_id", msg.ChatID)
+		}
+		return
+	}
+
 	// Chunk messages that exceed Telegram's limit
-	chunks := chunkMessage(content, maxMessageLen)
+	chunks := chunkMessage(msg.Content, maxMessageLen)
 	for _, chunk := range chunks {
 		if err := t.sendMessage(msg.ChatID, chunk); err != nil {
 			t.logger.Error("failed to send telegram message", "error", err, "chat_id", msg.ChatID)
@@ -278,7 +313,9 @@ func (t *TelegramChannel) sendResponse(msg bus.OutboundMessage) {
 	}
 }
 
-// --- Typing indicator ---
+// --- Typing / status indicator ---
+
+const statusGracePeriod = 2 * time.Second
 
 // sendChatAction sends a chat action (e.g. "typing") to a Telegram chat.
 func (t *TelegramChannel) sendChatAction(chatID, action string) {
@@ -294,26 +331,48 @@ func (t *TelegramChannel) sendChatAction(chatID, action string) {
 	resp.Body.Close()
 }
 
-// startTyping sends a "Thinking..." placeholder and pulses the typing indicator.
+// startTyping begins the delayed typing indicator system.
+// Phase 0 (grace): nothing shown for 2s. If response arrives before then, user sees nothing.
+// Phase 1 (typing): after 2s, typing bubble starts pulsing.
+// Phase 2 (status): when a tool starts, an editable status message appears.
 func (t *TelegramChannel) startTyping(chatID string) {
-	t.typingMu.Lock()
-	// Cancel any existing typing goroutine for this chat
-	if cancel, ok := t.typingCancel[chatID]; ok {
-		cancel()
+	t.stateMu.Lock()
+	// Cancel any existing state for this chat
+	if old, ok := t.chatStates[chatID]; ok {
+		if old.cancel != nil {
+			old.cancel()
+		}
+		if old.delayTimer != nil {
+			old.delayTimer.Stop()
+		}
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
-	t.typingCancel[chatID] = cancel
-	t.typingMu.Unlock()
-
-	// Send the placeholder message
-	if msgID, err := t.sendAndGetID(chatID, "_Thinking..._"); err == nil {
-		t.typingMu.Lock()
-		t.typingMsgID[chatID] = msgID
-		t.typingMu.Unlock()
+	state := &chatState{
+		cancel: cancel,
+		phase:  0,
 	}
+	t.chatStates[chatID] = state
 
-	go func() {
+	// Start grace period timer — after 2s, escalate to typing bubble
+	state.delayTimer = time.AfterFunc(statusGracePeriod, func() {
+		t.stateMu.Lock()
+		s := t.chatStates[chatID]
+		if s != state {
+			// State was replaced (new message came in), don't escalate
+			t.stateMu.Unlock()
+			return
+		}
+		s.phase = 1
+		t.stateMu.Unlock()
+
+		// Start pulsing typing action
 		t.sendChatAction(chatID, "typing")
+	})
+	t.stateMu.Unlock()
+
+	// Background goroutine to keep typing indicator alive
+	go func() {
 		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -321,26 +380,94 @@ func (t *TelegramChannel) startTyping(chatID string) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				t.sendChatAction(chatID, "typing")
+				t.stateMu.Lock()
+				s := t.chatStates[chatID]
+				inTypingPhase := s == state && s.phase >= 1
+				t.stateMu.Unlock()
+				if inTypingPhase {
+					t.sendChatAction(chatID, "typing")
+				}
 			}
 		}
 	}()
 }
 
-// stopTyping cancels the typing goroutine and deletes the "Thinking..." message.
+// stopTyping cancels the typing goroutine and cleans up any status message.
 func (t *TelegramChannel) stopTyping(chatID string) {
-	t.typingMu.Lock()
-	if cancel, ok := t.typingCancel[chatID]; ok {
-		cancel()
-		delete(t.typingCancel, chatID)
+	t.stateMu.Lock()
+	state, ok := t.chatStates[chatID]
+	if !ok {
+		t.stateMu.Unlock()
+		return
 	}
-	msgID := t.typingMsgID[chatID]
-	delete(t.typingMsgID, chatID)
-	t.typingMu.Unlock()
+	if state.cancel != nil {
+		state.cancel()
+	}
+	if state.delayTimer != nil {
+		state.delayTimer.Stop()
+	}
+	statusMsgID := state.statusMsgID
+	delete(t.chatStates, chatID)
+	t.stateMu.Unlock()
+
+	if statusMsgID != 0 {
+		t.deleteMessage(chatID, statusMsgID)
+	}
+}
+
+// updateStatus sends or edits the in-chat status message (e.g. "Running shell...").
+// If no status message exists yet, it sends one (phase 2). If one exists, it edits in place.
+func (t *TelegramChannel) updateStatus(chatID, text string) {
+	t.stateMu.Lock()
+	state, ok := t.chatStates[chatID]
+	if !ok {
+		t.stateMu.Unlock()
+		return
+	}
+
+	// Cancel the grace timer if still pending — we have real work to show
+	if state.delayTimer != nil {
+		state.delayTimer.Stop()
+	}
+	state.phase = 2
+
+	msgID := state.statusMsgID
+	t.stateMu.Unlock()
+
+	statusText := fmt.Sprintf("_%s_", text)
 
 	if msgID != 0 {
-		t.deleteMessage(chatID, msgID)
+		// Edit existing status message
+		t.editMessageText(chatID, msgID, statusText)
+	} else {
+		// Send new status message
+		if newID, err := t.sendAndGetID(chatID, statusText); err == nil {
+			t.stateMu.Lock()
+			if s, ok := t.chatStates[chatID]; ok && s == state {
+				s.statusMsgID = newID
+			}
+			t.stateMu.Unlock()
+		}
 	}
+
+	// Also pulse typing action so the bubble shows alongside the status
+	t.sendChatAction(chatID, "typing")
+}
+
+// editMessageText edits an existing Telegram message's text.
+func (t *TelegramChannel) editMessageText(chatID string, messageID int, text string) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       text,
+		"parse_mode": "Markdown",
+	})
+	resp, err := t.client.Post(t.apiURL("editMessageText"), "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.logger.Debug("editMessageText failed", "error", err, "chat_id", chatID)
+		return
+	}
+	resp.Body.Close()
 }
 
 // sendAndGetID sends a message and returns its message ID.

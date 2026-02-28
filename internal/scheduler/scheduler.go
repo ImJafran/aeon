@@ -277,6 +277,9 @@ func (s *Scheduler) fireJob(ctx context.Context, job Job) {
 		if IsOneShot(job.Schedule) {
 			s.logger.Info("one-shot reminder fired, disabling", "id", job.ID, "name", job.Name)
 			s.Pause(job.ID)
+		} else {
+			// Update next_run so the job doesn't re-fire on next tick
+			s.RecordSuccess(job.ID)
 		}
 
 		_ = jobCtx // context passed to trigger if needed

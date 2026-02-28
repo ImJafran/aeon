@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jafran/aeon/internal/bus"
-	"github.com/jafran/aeon/internal/providers"
-	"github.com/jafran/aeon/internal/tools"
+	"github.com/ImJafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/providers"
+	"github.com/ImJafran/aeon/internal/tools"
 )
 
 // SubagentTask represents a running background task.

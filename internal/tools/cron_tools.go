@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jafran/aeon/internal/scheduler"
+	"github.com/ImJafran/aeon/internal/scheduler"
 )
 
 // CronManageTool allows the LLM to manage scheduled jobs.
@@ -46,7 +46,7 @@ func (t *CronManageTool) Parameters() json.RawMessage {
 			},
 			"command": {
 				"type": "string",
-				"description": "The reminder text or message to send when it fires (e.g. 'Iftar Party at Rajshahi WordPress Community')"
+				"description": "The reminder text or message to send when it fires (e.g. 'Team standup meeting', 'Take medication')"
 			},
 			"skill_name": {
 				"type": "string",

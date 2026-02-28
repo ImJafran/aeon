@@ -17,7 +17,7 @@ services:
       - CGO_ENABLED=0
       - AEON_HOME=/tmp/aeon-dev
 
-  telegram:
+  serve:
     build:
       context: .
       target: builder

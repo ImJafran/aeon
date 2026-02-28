@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jafran/aeon/internal/memory"
+	"github.com/ImJafran/aeon/internal/memory"
 )
 
 // ---- memory_store ----
@@ -31,12 +31,16 @@ func (t *MemoryStoreTool) Parameters() json.RawMessage {
 			},
 			"category": {
 				"type": "string",
-				"enum": ["core", "daily", "conversation", "custom"],
-				"description": "Memory category (default: custom)"
+				"enum": ["core", "daily", "conversation", "custom", "lesson", "correction"],
+				"description": "Memory category. Use 'lesson' for things learned from mistakes, 'correction' for user corrections (default: custom)"
 			},
 			"tags": {
 				"type": "string",
 				"description": "Comma-separated tags for searchability"
+			},
+			"importance": {
+				"type": "number",
+				"description": "Importance score 0.0-1.0. Higher = persists longer. Corrections=0.9, lessons=0.85, core=0.8, facts=0.5, casual=0.3. Auto-set from category if omitted."
 			}
 		},
 		"required": ["content"]
@@ -44,9 +48,10 @@ func (t *MemoryStoreTool) Parameters() json.RawMessage {
 }
 
 type memoryStoreParams struct {
-	Content  string `json:"content"`
-	Category string `json:"category"`
-	Tags     string `json:"tags"`
+	Content    string  `json:"content"`
+	Category   string  `json:"category"`
+	Tags       string  `json:"tags"`
+	Importance float64 `json:"importance"`
 }
 
 func (t *MemoryStoreTool) Execute(ctx context.Context, params json.RawMessage) (ToolResult, error) {
@@ -67,9 +72,13 @@ func (t *MemoryStoreTool) Execute(ctx context.Context, params json.RawMessage) (
 		category = memory.CategoryDaily
 	case "conversation":
 		category = memory.CategoryConversation
+	case "lesson":
+		category = memory.CategoryLesson
+	case "correction":
+		category = memory.CategoryCorrection
 	}
 
-	id, err := t.store.MemStore(ctx, category, p.Content, p.Tags)
+	id, err := t.store.MemStore(ctx, category, p.Content, p.Tags, p.Importance)
 	if err != nil {
 		return ToolResult{ForLLM: fmt.Sprintf("Error storing memory: %v", err)}, nil
 	}

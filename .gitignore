@@ -1,7 +1,20 @@
-ref
-analysis-gemini.md
+# Reference implementations (internal)
+ref/
 
-# Build
+# Internal docs (content merged into README.md and CONTRIBUTING.md)
+analysis-gemini.md
+DEVELOPMENT_PLAN.md
+ARCHITECTURE.md
+USER_GUIDE.md
+initial_plan.md
+
+# Workspace templates (embedded in internal/bootstrap/init.go as constants)
+workspace/
+
+# Compiled binary
+/aeon
+
+# Build output
 bin/
 *.exe
 
@@ -12,12 +25,22 @@ vendor/
 .idea/
 .vscode/
 *.swp
+*.swo
+*~
 
 # Aeon runtime
 .aeon/
 
 # Secrets
-.env
+.env*
 config.yaml
-aeon-vps.pem
+*.pem
+*.key
+
+# Claude Code context
 CLAUDE.md
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db

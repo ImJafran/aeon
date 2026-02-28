@@ -1,4 +1,4 @@
-module github.com/jafran/aeon
+module github.com/ImJafran/aeon
 
 go 1.24.2
 

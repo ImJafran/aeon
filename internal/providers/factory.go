@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jafran/aeon/internal/config"
+	"github.com/ImJafran/aeon/internal/config"
 )
 
 // FromConfig creates a ProviderChain from configuration.
@@ -52,6 +52,16 @@ func FromConfig(cfg *config.Config, logger *slog.Logger) (Provider, error) {
 		logger.Info("provider enabled", "name", "gemini", "model", c.DefaultModel)
 	}
 
+	if c := cfg.Provider.ZAI; c != nil && c.Enabled && c.APIKey != "" {
+		p := NewOpenAICompat(
+			"https://api.z.ai/api/coding/paas/v4",
+			c.APIKey,
+			c.DefaultModel,
+		)
+		available["zai"] = p
+		logger.Info("provider enabled", "name", "zai", "model", c.DefaultModel)
+	}
+
 	if c := cfg.Provider.OpenAICompat; c != nil && c.Enabled && c.BaseURL != "" {
 		p := NewOpenAICompat(c.BaseURL, c.APIKey, c.DefaultModel)
 		available["openai_compat"] = p
@@ -90,7 +100,7 @@ func FromConfig(cfg *config.Config, logger *slog.Logger) (Provider, error) {
 
 	// If no explicit primary, pick the first available
 	if chainCfg.Primary == nil {
-		for _, name := range []string{"claude_cli", "anthropic", "gemini", "openai_compat"} {
+		for _, name := range []string{"zai", "claude_cli", "anthropic", "gemini", "openai_compat"} {
 			if p, ok := available[name]; ok {
 				chainCfg.Primary = p
 				break

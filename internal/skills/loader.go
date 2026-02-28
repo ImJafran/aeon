@@ -24,6 +24,7 @@ type SkillMeta struct {
 	Deps        []string          `yaml:"deps"`
 	Timeout     int               `yaml:"timeout"` // seconds, default 30
 	Entrypoint  string            `yaml:"entrypoint"` // default: main.py
+	Version     int               `yaml:"version"`    // auto-incremented on update
 }
 
 // Param describes a single parameter.
@@ -314,6 +315,31 @@ func (l *Loader) Register(skill *Skill) {
 	l.skills[skill.Meta.Name] = skill
 }
 
+// ReloadSkill re-reads a skill from disk and re-registers it.
+// Used after updating a skill's code or metadata.
+func (l *Loader) ReloadSkill(name string) error {
+	skillDir := filepath.Join(l.skillsDir, name)
+	skill, err := loadSkill(skillDir)
+	if err != nil {
+		return fmt.Errorf("reloading skill %s: %w", name, err)
+	}
+	l.Register(skill)
+	return nil
+}
+
+// ResetCircuitBreaker re-enables a disabled skill and resets its failure counter.
+func (l *Loader) ResetCircuitBreaker(name string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	skill, ok := l.skills[name]
+	if !ok {
+		return false
+	}
+	skill.Healthy = true
+	skill.Fails = 0
+	return true
+}
+
 // CreateSkill creates a new skill from provided code and metadata.
 func (l *Loader) CreateSkill(name, description, code string, deps []string, params map[string]Param, required []string) (*Skill, error) {
 	skillDir := filepath.Join(l.skillsDir, name)
@@ -362,6 +388,66 @@ func (l *Loader) CreateSkill(name, description, code string, deps []string, para
 		Meta:    meta,
 		Dir:     skillDir,
 		Healthy: true,
+	}
+
+	l.Register(skill)
+	return skill, nil
+}
+
+// UpdateSkill updates an existing skill's code and metadata, incrementing its version.
+func (l *Loader) UpdateSkill(name, description, code string, deps []string, params map[string]Param, required []string) (*Skill, error) {
+	l.mu.RLock()
+	existing, ok := l.skills[name]
+	l.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("skill %s not found — use CreateSkill to create it first", name)
+	}
+
+	newVersion := existing.Meta.Version + 1
+	skillDir := existing.Dir
+
+	// Build updated meta
+	meta := SkillMeta{
+		Name:        name,
+		Description: description,
+		Parameters:  params,
+		Required:    required,
+		Deps:        deps,
+		Timeout:     existing.Meta.Timeout,
+		Entrypoint:  existing.Meta.Entrypoint,
+		Version:     newVersion,
+	}
+	if meta.Timeout <= 0 {
+		meta.Timeout = 30
+	}
+	if meta.Entrypoint == "" {
+		meta.Entrypoint = "main.py"
+	}
+
+	// Write SKILL.md
+	mdContent := buildSkillMD(meta)
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(mdContent), 0644); err != nil {
+		return nil, fmt.Errorf("writing SKILL.md: %w", err)
+	}
+
+	// Write main.py
+	if err := os.WriteFile(filepath.Join(skillDir, meta.Entrypoint), []byte(code), 0755); err != nil {
+		return nil, fmt.Errorf("writing %s: %w", meta.Entrypoint, err)
+	}
+
+	// Install new deps if any
+	if len(deps) > 0 {
+		if err := l.installDeps(skillDir, deps); err != nil {
+			_ = err // non-fatal
+		}
+	}
+
+	skill := &Skill{
+		Meta:    meta,
+		Dir:     skillDir,
+		Healthy: true,
+		Fails:   0,
 	}
 
 	l.Register(skill)

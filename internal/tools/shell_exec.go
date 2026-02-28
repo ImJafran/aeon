@@ -12,11 +12,26 @@ import (
 )
 
 const maxOutputLen = 10000
-const defaultShellTimeout = 30 * time.Second
+const defaultShellTimeout = 120 * time.Second
+const maxShellTimeout = 600 * time.Second
 
 type SecurityChecker interface {
 	CheckCommand(command string) (int, string) // 0=allowed, 1=denied, 2=needs_approval
 	ScrubCredentials(text string) string
+}
+
+// approvedContextKey is used to bypass security checks for user-approved commands.
+type approvedContextKey struct{}
+
+// WithApproved returns a context that bypasses security approval checks.
+// Only use after the user has explicitly approved the command.
+func WithApproved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, approvedContextKey{}, true)
+}
+
+func isApproved(ctx context.Context) bool {
+	v, _ := ctx.Value(approvedContextKey{}).(bool)
+	return v
 }
 
 type ShellExecTool struct {
@@ -33,7 +48,7 @@ func (t *ShellExecTool) SetSecurity(s SecurityChecker) {
 }
 
 func (t *ShellExecTool) Name() string        { return "shell_exec" }
-func (t *ShellExecTool) Description() string  { return "Execute a shell command and return the output." }
+func (t *ShellExecTool) Description() string { return "Execute a shell command and return the output." }
 func (t *ShellExecTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
@@ -44,7 +59,7 @@ func (t *ShellExecTool) Parameters() json.RawMessage {
 			},
 			"timeout_seconds": {
 				"type": "integer",
-				"description": "Optional timeout in seconds (default: 30)"
+				"description": "Optional timeout in seconds (default: 120, max: 600)"
 			}
 		},
 		"required": ["command"]
@@ -66,25 +81,30 @@ func (t *ShellExecTool) Execute(ctx context.Context, params json.RawMessage) (To
 		return ToolResult{ForLLM: "Error: command is required"}, nil
 	}
 
-	// Security check
+	// Security check — only block truly catastrophic commands
 	if t.security != nil {
 		decision, reason := t.security.CheckCommand(p.Command)
 		switch decision {
-		case 1: // Denied
+		case 1: // Denied — always blocked
 			return ToolResult{ForLLM: fmt.Sprintf("BLOCKED: %s", reason)}, nil
-		case 2: // NeedsApproval
-			return ToolResult{
-				ForLLM:        fmt.Sprintf("REQUIRES APPROVAL: %s\nCommand: %s", reason, p.Command),
-				ForUser:       fmt.Sprintf("⚠️ Command requires approval: %s\nReason: %s", p.Command, reason),
-				NeedsApproval: true,
-				ApprovalInfo:  fmt.Sprintf("Command: %s\nReason: %s", p.Command, reason),
-			}, nil
+		case 2: // NeedsApproval — skip if user already approved
+			if !isApproved(ctx) {
+				return ToolResult{
+					ForLLM:        fmt.Sprintf("REQUIRES APPROVAL: %s\nCommand: %s", reason, p.Command),
+					ForUser:       fmt.Sprintf("⚠️ Command requires approval: %s\nReason: %s", p.Command, reason),
+					NeedsApproval: true,
+					ApprovalInfo:  fmt.Sprintf("Command: %s\nReason: %s", p.Command, reason),
+				}, nil
+			}
 		}
 	}
 
 	timeout := t.timeout
 	if p.TimeoutSeconds > 0 {
 		timeout = time.Duration(p.TimeoutSeconds) * time.Second
+		if timeout > maxShellTimeout {
+			timeout = maxShellTimeout
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -94,6 +114,9 @@ func (t *ShellExecTool) Execute(ctx context.Context, params json.RawMessage) (To
 
 	// Set process group so we can kill the entire tree
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Inherit full environment — the agent needs full system access.
+	// Credential scrubbing on output prevents leaking secrets to conversation history.
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

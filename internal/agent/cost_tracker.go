@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/jafran/aeon/internal/providers"
+	"github.com/ImJafran/aeon/internal/providers"
 )
 
 // CostTracker records token usage across provider calls.

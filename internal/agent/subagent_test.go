@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jafran/aeon/internal/bus"
-	"github.com/jafran/aeon/internal/tools"
+	"github.com/ImJafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/tools"
 )
 
 func TestSubagentManagerSpawnAndList(t *testing.T) {

@@ -105,8 +105,13 @@ type anthropicContentBlock struct {
 }
 
 func (p *AnthropicProvider) buildRequest(req CompletionRequest) anthropicRequest {
-	msgs := make([]anthropicMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
+	// Sanitize: remove orphaned tool messages whose tool_use_id has no matching
+	// tool_use in a preceding assistant message. This happens when trimHistory
+	// cuts in the middle of a tool call/result sequence, or after provider switches.
+	cleaned := sanitizeToolMessages(req.Messages)
+
+	msgs := make([]anthropicMessage, 0, len(cleaned))
+	for _, m := range cleaned {
 		if m.Role == "tool" {
 			// Merge consecutive tool results into a single user message
 			toolBlock := map[string]any{
@@ -204,4 +209,62 @@ func (p *AnthropicProvider) parseResponse(body []byte) (CompletionResponse, erro
 	}
 
 	return result, nil
+}
+
+// sanitizeToolMessages removes tool-result messages whose tool_use_id
+// doesn't appear in a preceding assistant message's ToolCalls. This
+// prevents Anthropic API errors when history trimming or provider
+// switches leave orphaned tool results.
+func sanitizeToolMessages(messages []Message) []Message {
+	// Collect all tool_use IDs from assistant messages
+	toolUseIDs := make(map[string]bool)
+	for _, m := range messages {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				toolUseIDs[tc.ID] = true
+			}
+		}
+	}
+
+	out := make([]Message, 0, len(messages))
+	for _, m := range messages {
+		if m.Role == "tool" && !toolUseIDs[m.ToolCallID] {
+			continue // orphaned tool result, skip
+		}
+		out = append(out, m)
+	}
+
+	// Also strip any assistant tool_use messages whose results were all dropped
+	// (i.e., the assistant message has tool calls but none of the following
+	// messages are tool results for those calls)
+	resultIDs := make(map[string]bool)
+	for _, m := range out {
+		if m.Role == "tool" {
+			resultIDs[m.ToolCallID] = true
+		}
+	}
+
+	final := make([]Message, 0, len(out))
+	for _, m := range out {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			// Check if at least one tool call has a result
+			hasResult := false
+			for _, tc := range m.ToolCalls {
+				if resultIDs[tc.ID] {
+					hasResult = true
+					break
+				}
+			}
+			if !hasResult {
+				// Convert to plain text message (drop tool calls)
+				if m.Content != "" {
+					final = append(final, Message{Role: "assistant", Content: m.Content})
+				}
+				continue
+			}
+		}
+		final = append(final, m)
+	}
+
+	return final
 }

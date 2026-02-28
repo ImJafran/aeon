@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/bus"
 )
 
 func TestApprovalGateApprove(t *testing.T) {

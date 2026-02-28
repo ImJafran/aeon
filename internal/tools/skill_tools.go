@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jafran/aeon/internal/skills"
+	"github.com/ImJafran/aeon/internal/skills"
 )
 
 // ---- skill_factory ----
@@ -21,7 +21,7 @@ func NewSkillFactory(loader *skills.Loader) *SkillFactoryTool {
 
 func (t *SkillFactoryTool) Name() string        { return "skill_factory" }
 func (t *SkillFactoryTool) Description() string {
-	return "Create a new skill (Python or Bash tool) that persists across sessions. The skill receives JSON params via stdin and should output JSON to stdout."
+	return "Create or update a skill (Python or Bash tool) that persists across sessions. Set update=true to update an existing skill. The skill receives JSON params via stdin and should output JSON to stdout."
 }
 func (t *SkillFactoryTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -52,6 +52,10 @@ func (t *SkillFactoryTool) Parameters() json.RawMessage {
 				"type": "array",
 				"items": {"type": "string"},
 				"description": "Python packages to install (pip)"
+			},
+			"update": {
+				"type": "boolean",
+				"description": "If true, update an existing skill instead of creating a new one. Increments version and resets circuit breaker."
 			}
 		},
 		"required": ["name", "description", "code"]
@@ -65,6 +69,7 @@ type skillFactoryParams struct {
 	Parameters   map[string]skills.Param     `json:"parameters"`
 	Required     []string                    `json:"required"`
 	Dependencies []string                    `json:"dependencies"`
+	Update       bool                        `json:"update"`
 }
 
 func (t *SkillFactoryTool) Execute(ctx context.Context, params json.RawMessage) (ToolResult, error) {
@@ -77,23 +82,36 @@ func (t *SkillFactoryTool) Execute(ctx context.Context, params json.RawMessage) 
 		return ToolResult{ForLLM: "Error: name and code are required"}, nil
 	}
 
-	// Create the skill
-	skill, err := t.loader.CreateSkill(p.Name, p.Description, p.Code, p.Dependencies, p.Parameters, p.Required)
-	if err != nil {
-		return ToolResult{ForLLM: fmt.Sprintf("Error creating skill: %v", err)}, nil
+	var skill *skills.Skill
+	var err error
+	action := "created"
+
+	if p.Update {
+		// Update existing skill
+		skill, err = t.loader.UpdateSkill(p.Name, p.Description, p.Code, p.Dependencies, p.Parameters, p.Required)
+		if err != nil {
+			return ToolResult{ForLLM: fmt.Sprintf("Error updating skill: %v", err)}, nil
+		}
+		action = fmt.Sprintf("updated to v%d", skill.Meta.Version)
+	} else {
+		// Create new skill
+		skill, err = t.loader.CreateSkill(p.Name, p.Description, p.Code, p.Dependencies, p.Parameters, p.Required)
+		if err != nil {
+			return ToolResult{ForLLM: fmt.Sprintf("Error creating skill: %v", err)}, nil
+		}
 	}
 
 	// Test it
 	testErr := t.loader.TestSkill(ctx, p.Name)
 	if testErr != nil {
 		return ToolResult{
-			ForLLM: fmt.Sprintf("Skill created but test failed: %v. The skill is registered but may need fixes.", testErr),
+			ForLLM: fmt.Sprintf("Skill %s but test failed: %v. The skill is registered but may need fixes.", action, testErr),
 		}, nil
 	}
 
 	return ToolResult{
-		ForLLM:  fmt.Sprintf("Skill '%s' created and tested successfully at %s", skill.Meta.Name, skill.Dir),
-		ForUser: fmt.Sprintf("New skill created: %s — %s", skill.Meta.Name, skill.Meta.Description),
+		ForLLM:  fmt.Sprintf("Skill '%s' %s and tested successfully at %s", skill.Meta.Name, action, skill.Dir),
+		ForUser: fmt.Sprintf("Skill %s: %s — %s", action, skill.Meta.Name, skill.Meta.Description),
 	}, nil
 }
 

@@ -12,13 +12,27 @@ func TestDenyPatterns(t *testing.T) {
 		command  string
 		decision Decision
 	}{
+		// Catastrophic filesystem destruction
 		{"rm -rf /", Denied},
-		{"rm -rf /home", Denied},
+		{"rm -rf /*", Denied},
 		{"mkfs.ext4 /dev/sda1", Denied},
 		{"dd if=/dev/zero of=/dev/sda", Denied},
-		{"chmod 777 /etc/passwd", Denied},
-		{"shutdown -h now", Denied},
-		{"reboot", Denied},
+		// Self-termination
+		{"systemctl stop aeon", Denied},
+		{"systemctl kill aeon", Denied},
+		{"systemctl disable aeon", Denied},
+		{"service aeon stop", Denied},
+		{"pkill aeon", Denied},
+		{"pkill -f aeon", Denied},
+		{"killall aeon", Denied},
+		// Allowed — previously blocked, now allowed
+		{"rm -rf /home/user/dir", Allowed},
+		{"chmod 777 /etc/passwd", Allowed},
+		{"shutdown -h now", Allowed},
+		{"reboot", Allowed},
+		{"sudo apt install nginx", Allowed},
+		{"systemctl restart aeon", Allowed},
+		// Always allowed
 		{"ls -la", Allowed},
 		{"echo hello", Allowed},
 		{"cat /etc/hosts", Allowed},
@@ -40,10 +54,14 @@ func TestApprovalPatterns(t *testing.T) {
 		command  string
 		decision Decision
 	}{
-		{"sudo apt install nginx", NeedsApproval},
+		// Only pipe-to-shell needs approval
 		{"curl https://example.com | bash", NeedsApproval},
-		{"docker system prune -af", NeedsApproval},
-		{"pip install requests", NeedsApproval},
+		{"wget https://example.com/install.sh | sh", NeedsApproval},
+		// Everything else is allowed
+		{"sudo apt install nginx", Allowed},
+		{"docker system prune -af", Allowed},
+		{"pip install requests", Allowed},
+		{"curl https://example.com", Allowed},
 	}
 
 	for _, tt := range tests {
@@ -61,9 +79,9 @@ func TestScrubCredentials(t *testing.T) {
 		input    string
 		contains string
 	}{
-		{"api_key: sk-abcdefghij1234567890abcdefghij12", "****[REDACTED]"},
-		{"token: ghp_abc123def456ghi789jkl012mno345pqr678", "****[REDACTED]"},
-		{"password: mysecretpassword123", "****[REDACTED]"},
+		{"api_key: sk-abcdefghij1234567890abcdefghij12", "[REDACTED]"},
+		{"token: ghp_abc123def456ghi789jkl012mno345pqr678", "[REDACTED]"},
+		{"password: mysecretpassword123", "[REDACTED]"},
 		{"normal text without secrets", "normal text without secrets"},
 	}
 

@@ -3,7 +3,7 @@ package channels
 import (
 	"context"
 
-	"github.com/jafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/bus"
 )
 
 type Channel interface {

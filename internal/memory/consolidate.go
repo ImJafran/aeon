@@ -64,7 +64,7 @@ func (c *Consolidator) Consolidate(ctx context.Context) (int, error) {
 		}
 
 		// Store consolidated memory as core
-		_, err = c.store.MemStore(ctx, CategoryCore, summary, tag)
+		_, err = c.store.MemStore(ctx, CategoryCore, summary, tag, 0.8)
 		if err != nil {
 			continue
 		}

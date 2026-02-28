@@ -104,9 +104,10 @@ type openaiToolCall struct {
 type openaiResponse struct {
 	Choices []struct {
 		Message struct {
-			Role      string           `json:"role"`
-			Content   string           `json:"content"`
-			ToolCalls []openaiToolCall  `json:"tool_calls,omitempty"`
+			Role             string           `json:"role"`
+			Content          string           `json:"content"`
+			ReasoningContent string           `json:"reasoning_content,omitempty"`
+			ToolCalls        []openaiToolCall  `json:"tool_calls,omitempty"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -172,8 +173,12 @@ func (p *OpenAICompatProvider) parseResponse(body []byte) (CompletionResponse, e
 	}
 
 	choice := resp.Choices[0]
+	content := choice.Message.Content
+	if content == "" && choice.Message.ReasoningContent != "" {
+		content = choice.Message.ReasoningContent
+	}
 	result := CompletionResponse{
-		Content:  choice.Message.Content,
+		Content:  content,
 		Provider: p.Name(),
 		Usage: TokenUsage{
 			InputTokens:  resp.Usage.PromptTokens,

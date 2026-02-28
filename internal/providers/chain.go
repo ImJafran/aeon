@@ -15,6 +15,7 @@ type ProviderChain struct {
 	all        map[string]Provider // all available providers by name
 	cooldowns  *CooldownTracker
 	logger     *slog.Logger
+	onRetry    func(failed, next string) // called when failing over to another provider
 }
 
 type ChainConfig struct {
@@ -59,6 +60,11 @@ func (c *ProviderChain) Available() bool {
 	return c.primary != nil && c.primary.Available()
 }
 
+// SetRetryCallback sets a function called when the chain fails over to a different provider.
+func (c *ProviderChain) SetRetryCallback(fn func(failed, next string)) {
+	c.onRetry = fn
+}
+
 func (c *ProviderChain) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
 	selected := c.selectProvider(req.Hint)
 	if selected == nil {
@@ -72,7 +78,7 @@ func (c *ProviderChain) Complete(ctx context.Context, req CompletionRequest) (Co
 	}
 
 	var lastErr error
-	for _, provider := range candidates {
+	for i, provider := range candidates {
 		name := provider.Name()
 
 		// Skip providers in cooldown
@@ -105,6 +111,12 @@ func (c *ProviderChain) Complete(ctx context.Context, req CompletionRequest) (Co
 		// Retriable — mark cooldown and try next
 		c.cooldowns.MarkFailed(name)
 		lastErr = err
+
+		// Notify about failover if a next candidate exists
+		if c.onRetry != nil && i+1 < len(candidates) {
+			nextName := candidates[i+1].Name()
+			c.onRetry(name, nextName)
+		}
 	}
 
 	if lastErr != nil {

@@ -7,15 +7,16 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jafran/aeon/internal/agent"
-	"github.com/jafran/aeon/internal/bus"
-	"github.com/jafran/aeon/internal/config"
-	"github.com/jafran/aeon/internal/memory"
-	"github.com/jafran/aeon/internal/providers"
-	"github.com/jafran/aeon/internal/scheduler"
-	"github.com/jafran/aeon/internal/security"
-	"github.com/jafran/aeon/internal/skills"
-	"github.com/jafran/aeon/internal/tools"
+	"github.com/ImJafran/aeon/internal/agent"
+	"github.com/ImJafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/channels"
+	"github.com/ImJafran/aeon/internal/config"
+	"github.com/ImJafran/aeon/internal/memory"
+	"github.com/ImJafran/aeon/internal/providers"
+	"github.com/ImJafran/aeon/internal/scheduler"
+	"github.com/ImJafran/aeon/internal/security"
+	"github.com/ImJafran/aeon/internal/skills"
+	"github.com/ImJafran/aeon/internal/tools"
 )
 
 // Deps holds all shared dependencies for an Aeon instance.
@@ -73,6 +74,9 @@ func BuildDeps(cfg *config.Config, logger *slog.Logger) (*Deps, error) {
 	d.Registry.Register(tools.NewMemoryStore(memStore))
 	d.Registry.Register(tools.NewMemoryRecall(memStore))
 
+	// Register log tool
+	d.Registry.Register(tools.NewLogRead())
+
 	// Initialize skill system
 	skillsDir := filepath.Join(home, "skills")
 	venvPath := filepath.Join(home, "base_venv")
@@ -123,6 +127,7 @@ func BuildDeps(cfg *config.Config, logger *slog.Logger) (*Deps, error) {
 	d.Loop.SetScrubber(d.SecAdapter)
 	d.Loop.SetSubagentManager(d.SubMgr)
 	d.Loop.SetMemoryStore(memStore)
+	d.Loop.SetSkillLoader(d.SkillLoader)
 	d.Loop.SetSystemPrompt(cfg.Agent.SystemPrompt)
 	d.Loop.SetMaxHistoryMessages(cfg.Agent.MaxHistoryMessages)
 	d.Loop.SetMaxIterations(cfg.Agent.MaxIterations)
@@ -140,7 +145,7 @@ func (d *Deps) SetupSchedulerTrigger() {
 			if d.Cfg.Channels.Telegram != nil {
 				for _, uid := range d.Cfg.Channels.Telegram.AllowedUsers {
 					d.Bus.Send(bus.OutboundMessage{
-						Channel: "telegram",
+						Channel: channels.TelegramChannelName,
 						ChatID:  fmt.Sprintf("%d", uid),
 						Content: fmt.Sprintf("Reminder: %s", job.Command),
 					})
@@ -153,6 +158,40 @@ func (d *Deps) SetupSchedulerTrigger() {
 			Content: fmt.Sprintf("[cron:%s] %s", job.Name, job.Command),
 		})
 	})
+
+	// Register built-in heartbeat job if not already present
+	d.ensureHeartbeatJob()
+}
+
+// ensureHeartbeatJob creates the __heartbeat__ cron job if it doesn't exist.
+func (d *Deps) ensureHeartbeatJob() {
+	if d.Scheduler == nil {
+		return
+	}
+
+	interval := d.Cfg.Agent.HeartbeatInterval
+	if interval == "" {
+		return
+	}
+
+	// Check if heartbeat job already exists
+	jobs, err := d.Scheduler.List(false)
+	if err != nil {
+		return
+	}
+	for _, j := range jobs {
+		if j.Name == "__heartbeat__" {
+			return // already exists
+		}
+	}
+
+	schedule := "every " + interval
+	_, err = d.Scheduler.Create("__heartbeat__", schedule, "", "heartbeat", "{}")
+	if err != nil {
+		d.Logger.Warn("failed to create heartbeat job", "error", err)
+	} else {
+		d.Logger.Info("heartbeat job registered", "interval", interval)
+	}
 }
 
 // StartScheduler starts the scheduler if available.

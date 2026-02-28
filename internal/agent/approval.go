@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/bus"
 )
 
 // ApprovalGate handles human-in-the-loop approval for dangerous tool operations.

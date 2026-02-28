@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jafran/aeon/internal/bus"
-	"github.com/jafran/aeon/internal/providers"
-	"github.com/jafran/aeon/internal/tools"
+	"github.com/ImJafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/providers"
+	"github.com/ImJafran/aeon/internal/tools"
 )
 
 func newTestLogger() *slog.Logger {
@@ -129,17 +129,29 @@ func TestToolCallFlow(t *testing.T) {
 
 	msgBus.Publish(bus.InboundMessage{Channel: "test", ChatID: "1", Content: "do something"})
 
-	// Should get tool ForUser output first, then final response
+	// Collect non-status messages (tool ForUser output + final response)
 	var messages []string
-	for i := 0; i < 2; i++ {
+	deadline := time.After(3 * time.Second)
+	for {
 		select {
 		case out := <-outCh:
+			// Skip status update messages
+			if out.Metadata != nil && out.Metadata[bus.MetaStatus] == "true" {
+				continue
+			}
 			messages = append(messages, out.Content)
-		case <-time.After(2 * time.Second):
-			t.Fatalf("timeout waiting for message %d, got %d so far", i+1, len(messages))
+			if out.Content == "Done!" {
+				goto done
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for messages, got %d so far: %v", len(messages), messages)
 		}
 	}
+done:
 
+	if len(messages) < 2 {
+		t.Fatalf("expected at least 2 messages, got %d: %v", len(messages), messages)
+	}
 	if messages[len(messages)-1] != "Done!" {
 		t.Errorf("expected last message to be 'Done!', got %q", messages[len(messages)-1])
 	}

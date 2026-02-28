@@ -27,6 +27,7 @@ type ProviderConfig struct {
 	ClaudeCLI    *ClaudeCLIConfig    `yaml:"claude_cli"`
 	Anthropic    *AnthropicConfig    `yaml:"anthropic"`
 	Gemini       *GeminiConfig       `yaml:"gemini"`
+	ZAI          *ZAIConfig          `yaml:"zai"`
 	OpenAICompat *OpenAICompatConfig `yaml:"openai_compat"`
 }
 
@@ -50,6 +51,12 @@ type GeminiConfig struct {
 	DefaultModel string `yaml:"default_model"`
 	AudioModel   string `yaml:"audio_model"` // native audio (transcription/live)
 	TTSModel     string `yaml:"tts_model"`   // text-to-speech
+}
+
+type ZAIConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	APIKey       string `yaml:"api_key"`
+	DefaultModel string `yaml:"default_model"`
 }
 
 type OpenAICompatConfig struct {
@@ -108,6 +115,7 @@ type AgentConfig struct {
 	MaxTokens          int    `yaml:"max_tokens"`           // max tokens for LLM response (default: 4096)
 	DailyTokenLimit    int    `yaml:"daily_token_limit"`    // daily token limit, 0=unlimited
 	ToolTimeout        string `yaml:"tool_timeout"`         // default tool execution timeout (default: "60s")
+	HeartbeatInterval  string `yaml:"heartbeat_interval"`   // heartbeat interval (default: "30m", empty to disable)
 }
 
 type LogConfig struct {
@@ -207,6 +215,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Agent.ToolTimeout == "" {
 		cfg.Agent.ToolTimeout = "60s"
 	}
+	if cfg.Agent.HeartbeatInterval == "" {
+		cfg.Agent.HeartbeatInterval = "30m"
+	}
 	if cfg.Agent.SystemPrompt == "" {
 		cfg.Agent.SystemPrompt = `You are Aeon, a persistent AI assistant on the user's system. You have tools — use them, don't describe them.
 
@@ -243,10 +254,11 @@ func validate(cfg *Config) error {
 
 	// Validate duration strings
 	durations := map[string]string{
-		"security.approval_timeout": cfg.Security.ApprovalTimeout,
-		"agent.shell_timeout":       cfg.Agent.ShellTimeout,
-		"agent.provider_timeout":    cfg.Agent.ProviderTimeout,
-		"agent.tool_timeout":        cfg.Agent.ToolTimeout,
+		"security.approval_timeout":  cfg.Security.ApprovalTimeout,
+		"agent.shell_timeout":        cfg.Agent.ShellTimeout,
+		"agent.provider_timeout":     cfg.Agent.ProviderTimeout,
+		"agent.tool_timeout":         cfg.Agent.ToolTimeout,
+		"agent.heartbeat_interval":   cfg.Agent.HeartbeatInterval,
 	}
 	for name, val := range durations {
 		if val != "" {
@@ -270,6 +282,9 @@ func validate(cfg *Config) error {
 	}
 	if c := cfg.Provider.Gemini; c != nil && c.Enabled && strings.HasPrefix(c.APIKey, "${") {
 		return fmt.Errorf("gemini api_key contains unexpanded env var: %s", c.APIKey)
+	}
+	if c := cfg.Provider.ZAI; c != nil && c.Enabled && strings.HasPrefix(c.APIKey, "${") {
+		return fmt.Errorf("zai api_key contains unexpanded env var: %s", c.APIKey)
 	}
 
 	return nil
@@ -301,6 +316,10 @@ func hasAnyProvider(cfg *Config) bool {
 		key := cfg.Provider.Gemini.APIKey
 		return key != "" && !strings.HasPrefix(key, "${")
 	}
+	if cfg.Provider.ZAI != nil && cfg.Provider.ZAI.Enabled {
+		key := cfg.Provider.ZAI.APIKey
+		return key != "" && !strings.HasPrefix(key, "${")
+	}
 	if cfg.Provider.OpenAICompat != nil && cfg.Provider.OpenAICompat.Enabled {
 		return cfg.Provider.OpenAICompat.BaseURL != ""
 	}
@@ -316,6 +335,9 @@ func EnabledProviderCount(cfg *Config) int {
 		count++
 	}
 	if cfg.Provider.Gemini != nil && cfg.Provider.Gemini.Enabled {
+		count++
+	}
+	if cfg.Provider.ZAI != nil && cfg.Provider.ZAI.Enabled {
 		count++
 	}
 	if cfg.Provider.OpenAICompat != nil && cfg.Provider.OpenAICompat.Enabled {

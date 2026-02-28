@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jafran/aeon/internal/providers"
+	"github.com/ImJafran/aeon/internal/providers"
 )
 
 func TestCostTracker(t *testing.T) {

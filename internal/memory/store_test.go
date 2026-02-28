@@ -22,7 +22,7 @@ func TestStoreAndRecall(t *testing.T) {
 	ctx := context.Background()
 
 	// Store a memory
-	id, err := store.MemStore(ctx, CategoryCore, "My server IP is 192.168.1.100", "server,ip")
+	id, err := store.MemStore(ctx, CategoryCore, "My server IP is 192.168.1.100", "server,ip", 0)
 	if err != nil {
 		t.Fatalf("store error: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestStoreAndGet(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 
-	id, _ := store.MemStore(ctx, CategoryDaily, "Had a meeting about project X", "meeting")
+	id, _ := store.MemStore(ctx, CategoryDaily, "Had a meeting about project X", "meeting", 0)
 
 	entry, err := store.Get(ctx, id)
 	if err != nil {
@@ -67,8 +67,8 @@ func TestCount(t *testing.T) {
 		t.Errorf("expected 0 entries, got %d", count)
 	}
 
-	store.MemStore(ctx, CategoryCore, "entry 1", "")
-	store.MemStore(ctx, CategoryCore, "entry 2", "")
+	store.MemStore(ctx, CategoryCore, "entry 1", "", 0)
+	store.MemStore(ctx, CategoryCore, "entry 2", "", 0)
 
 	count, _ = store.Count(ctx)
 	if count != 2 {
@@ -80,7 +80,7 @@ func TestForget(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 
-	id, _ := store.MemStore(ctx, CategoryCustom, "forget me", "")
+	id, _ := store.MemStore(ctx, CategoryCustom, "forget me", "", 0)
 
 	err := store.Forget(ctx, id)
 	if err != nil {
@@ -130,8 +130,8 @@ func TestList(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 
-	store.MemStore(ctx, CategoryCore, "core entry", "")
-	store.MemStore(ctx, CategoryDaily, "daily entry", "")
+	store.MemStore(ctx, CategoryCore, "core entry", "", 0)
+	store.MemStore(ctx, CategoryDaily, "daily entry", "", 0)
 
 	// List all
 	all, _ := store.List(ctx, "", 10)
@@ -150,7 +150,7 @@ func TestBuildContextFromMemory(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 
-	store.MemStore(ctx, CategoryCore, "The database password is in /etc/secrets", "db,password")
+	store.MemStore(ctx, CategoryCore, "The database password is in /etc/secrets", "db,password", 0)
 
 	result := store.BuildContextFromMemory(ctx, "database password")
 	if result == "" {
@@ -163,8 +163,8 @@ func TestBuildContextFromMemory_StopWordsOnly(t *testing.T) {
 	ctx := context.Background()
 
 	// Store core memories (like a user's identity)
-	store.MemStore(ctx, CategoryCore, "The user's name is Jafran", "name,user")
-	store.MemStore(ctx, CategoryCore, "Jafran lives in Rajshahi, Bangladesh", "location")
+	store.MemStore(ctx, CategoryCore, "The user's name is Alice", "name,user", 0)
+	store.MemStore(ctx, CategoryCore, "Alice lives in Berlin, Germany", "location", 0)
 
 	// "who am I" — all words are stop words, extractKeywords returns empty
 	// But core memories should still be injected
@@ -172,8 +172,8 @@ func TestBuildContextFromMemory_StopWordsOnly(t *testing.T) {
 	if result == "" {
 		t.Error("expected core memories even when query has only stop words")
 	}
-	if !contains(result, "Jafran") {
-		t.Errorf("expected memory about Jafran, got: %s", result)
+	if !contains(result, "Alice") {
+		t.Errorf("expected memory about Alice, got: %s", result)
 	}
 }
 

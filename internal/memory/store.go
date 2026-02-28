@@ -17,15 +17,19 @@ const (
 	CategoryDaily        Category = "daily"
 	CategoryConversation Category = "conversation"
 	CategoryCustom       Category = "custom"
+	CategoryLesson       Category = "lesson"
+	CategoryCorrection   Category = "correction"
 )
 
 type Entry struct {
-	ID         int64
-	Category   Category
-	Content    string
-	Tags       string
-	CreatedAt  time.Time
-	AccessedAt time.Time
+	ID          int64
+	Category    Category
+	Content     string
+	Tags        string
+	Importance  float64
+	AccessCount int
+	CreatedAt   time.Time
+	AccessedAt  time.Time
 }
 
 type Store struct {
@@ -80,6 +84,13 @@ func initSchema(db *sql.DB) error {
 		db.Exec(`ALTER TABLE memories ADD COLUMN access_count INTEGER DEFAULT 0`)
 	}
 
+	// Migration: add importance column if missing
+	var impCount int
+	err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name='importance'`).Scan(&impCount)
+	if err == nil && impCount == 0 {
+		db.Exec(`ALTER TABLE memories ADD COLUMN importance REAL DEFAULT 0.5`)
+	}
+
 	rest := `
 
 		CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -116,11 +127,15 @@ func initSchema(db *sql.DB) error {
 	return err
 }
 
-// MemStore stores a memory entry.
-func (s *Store) MemStore(_ context.Context, category Category, content, tags string) (int64, error) {
+// MemStore stores a memory entry with an importance score.
+// Importance ranges from 0.0 to 1.0 (default 0.5).
+func (s *Store) MemStore(_ context.Context, category Category, content, tags string, importance float64) (int64, error) {
+	if importance <= 0 {
+		importance = defaultImportance(category)
+	}
 	result, err := s.db.Exec(
-		"INSERT INTO memories (category, content, tags) VALUES (?, ?, ?)",
-		string(category), content, tags,
+		"INSERT INTO memories (category, content, tags, importance) VALUES (?, ?, ?, ?)",
+		string(category), content, tags, importance,
 	)
 	if err != nil {
 		return 0, err
@@ -128,19 +143,44 @@ func (s *Store) MemStore(_ context.Context, category Category, content, tags str
 	return result.LastInsertId()
 }
 
+// defaultImportance returns a sensible default importance for a category.
+func defaultImportance(category Category) float64 {
+	switch category {
+	case CategoryCorrection:
+		return 0.9
+	case CategoryLesson:
+		return 0.85
+	case CategoryCore:
+		return 0.8
+	case CategoryDaily:
+		return 0.5
+	case CategoryConversation:
+		return 0.3
+	default:
+		return 0.5
+	}
+}
+
 // Recall searches memories using FTS5 keyword search with composite relevance scoring.
-// Combines FTS5 rank with recency weighting.
+// Score = fts5_rank * 0.4 + decay_score * 0.3 + importance * 0.3
+// where decay_score = exp(-0.05 * days_since_access) * (1 + 0.02 * access_count)
 func (s *Store) Recall(_ context.Context, query string, limit int) ([]Entry, error) {
 	if limit <= 0 {
 		limit = 5
 	}
 
 	rows, err := s.db.Query(`
-		SELECT m.id, m.category, m.content, m.tags, m.created_at, m.accessed_at
+		SELECT m.id, m.category, m.content, m.tags, COALESCE(m.importance, 0.5),
+		       COALESCE(m.access_count, 0), m.created_at, m.accessed_at
 		FROM memories_fts fts
 		JOIN memories m ON m.id = fts.rowid
 		WHERE memories_fts MATCH ?
-		ORDER BY rank * (1.0 + 0.5 / (1.0 + julianday('now') - julianday(m.accessed_at)))
+		ORDER BY (
+			rank * 0.4
+			+ (EXP(-0.05 * (julianday('now') - julianday(m.accessed_at)))
+			   * (1.0 + 0.02 * COALESCE(m.access_count, 0))) * 0.3
+			+ COALESCE(m.importance, 0.5) * 0.3
+		)
 		LIMIT ?
 	`, query, limit)
 	if err != nil {
@@ -149,7 +189,7 @@ func (s *Store) Recall(_ context.Context, query string, limit int) ([]Entry, err
 	}
 	defer rows.Close()
 
-	entries, err := scanEntries(rows)
+	entries, err := scanEntriesFull(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -319,6 +359,23 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+// Consolidate removes old, low-importance memories that haven't been accessed recently.
+// Keeps core, lesson, and correction memories. Removes daily/conversation/custom memories
+// older than 30 days with low access counts and importance.
+func (s *Store) Consolidate(_ context.Context) (int64, error) {
+	result, err := s.db.Exec(`
+		DELETE FROM memories
+		WHERE category NOT IN ('core', 'lesson', 'correction')
+		  AND julianday('now') - julianday(accessed_at) > 30
+		  AND COALESCE(access_count, 0) < 2
+		  AND COALESCE(importance, 0.5) < 0.5
+	`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()
@@ -329,6 +386,20 @@ func scanEntries(rows *sql.Rows) ([]Entry, error) {
 	for rows.Next() {
 		var e Entry
 		if err := rows.Scan(&e.ID, &e.Category, &e.Content, &e.Tags, &e.CreatedAt, &e.AccessedAt); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// scanEntriesFull scans rows with importance and access_count fields.
+func scanEntriesFull(rows *sql.Rows) ([]Entry, error) {
+	var entries []Entry
+	for rows.Next() {
+		var e Entry
+		if err := rows.Scan(&e.ID, &e.Category, &e.Content, &e.Tags, &e.Importance,
+			&e.AccessCount, &e.CreatedAt, &e.AccessedAt); err != nil {
 			continue
 		}
 		entries = append(entries, e)

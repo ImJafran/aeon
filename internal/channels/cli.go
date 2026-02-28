@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jafran/aeon/internal/bus"
+	"github.com/ImJafran/aeon/internal/bus"
 )
 
 const CLIChannelName = "cli"
@@ -41,9 +41,8 @@ func (c *CLIChannel) Start(ctx context.Context, b *bus.MessageBus) error {
 	return nil
 }
 
-func (c *CLIChannel) Stop() error {
+func (c *CLIChannel) Stop() {
 	close(c.done)
-	return nil
 }
 
 func (c *CLIChannel) readInput(ctx context.Context, b *bus.MessageBus) {
@@ -95,6 +94,9 @@ func (c *CLIChannel) writeOutput(ctx context.Context) {
 				continue
 			}
 			if msg.Silent {
+				continue
+			}
+			if msg.Metadata != nil && msg.Metadata[bus.MetaStatus] == "true" {
 				continue
 			}
 			fmt.Printf("\n%s\n\n> ", msg.Content)

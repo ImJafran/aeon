@@ -1,9 +1,13 @@
 BINARY_NAME=aeon
 BUILD_DIR=bin
-VERSION?=0.1.0
+VERSION?=0.0.1-beta
 LDFLAGS=-ldflags "-s -w -X main.version=$(VERSION)"
 
-.PHONY: build build-debug run test test-verbose lint clean docker-build docker-test install
+# Install location (no sudo needed)
+INSTALL_PREFIX?=$(HOME)/.local
+INSTALL_BIN_DIR=$(INSTALL_PREFIX)/bin
+
+.PHONY: build build-debug build-linux run test test-verbose lint clean install uninstall docker-build docker-test docker-run
 
 build:
 	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/aeon
@@ -31,7 +35,17 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 install: build
-	cp $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/$(BINARY_NAME)
+	@mkdir -p $(INSTALL_BIN_DIR)
+	@cp $(BUILD_DIR)/$(BINARY_NAME) $(INSTALL_BIN_DIR)/$(BINARY_NAME).new
+	@chmod +x $(INSTALL_BIN_DIR)/$(BINARY_NAME).new
+	@mv -f $(INSTALL_BIN_DIR)/$(BINARY_NAME).new $(INSTALL_BIN_DIR)/$(BINARY_NAME)
+	@echo "Installed $(INSTALL_BIN_DIR)/$(BINARY_NAME)"
+
+uninstall:
+	@rm -f $(INSTALL_BIN_DIR)/$(BINARY_NAME)
+	@echo "Removed $(INSTALL_BIN_DIR)/$(BINARY_NAME)"
+	@echo "To also remove all data: rm -rf ~/.aeon"
+	@echo "Or run: aeon uninstall (removes binary + data + systemd service)"
 
 docker-build:
 	docker compose run --rm build
