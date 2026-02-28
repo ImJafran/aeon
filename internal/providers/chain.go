@@ -13,6 +13,7 @@ type ProviderChain struct {
 	multimodal Provider
 	fallback   Provider
 	all        map[string]Provider // all available providers by name
+	cooldowns  *CooldownTracker
 	logger     *slog.Logger
 }
 
@@ -29,6 +30,7 @@ func NewChain(cfg ChainConfig, logger *slog.Logger) *ProviderChain {
 		fast:       cfg.Fast,
 		multimodal: cfg.Multimodal,
 		fallback:   cfg.Fallback,
+		cooldowns:  NewCooldownTracker(),
 		logger:     logger,
 	}
 
@@ -58,28 +60,57 @@ func (c *ProviderChain) Available() bool {
 }
 
 func (c *ProviderChain) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
-	provider := c.selectProvider(req.Hint)
-	if provider == nil {
+	selected := c.selectProvider(req.Hint)
+	if selected == nil {
 		return CompletionResponse{}, fmt.Errorf("no available provider for hint=%q", req.Hint)
 	}
 
-	c.logger.Debug("routing request", "provider", provider.Name(), "hint", req.Hint)
-
-	resp, err := provider.Complete(ctx, req)
-	if err != nil {
-		// Try fallback
-		if c.fallback != nil && c.fallback != provider && c.fallback.Available() {
-			c.logger.Warn("primary provider failed, trying fallback",
-				"primary", provider.Name(),
-				"fallback", c.fallback.Name(),
-				"error", err,
-			)
-			return c.fallback.Complete(ctx, req)
-		}
-		return CompletionResponse{}, err
+	// Build ordered list of providers to try: selected first, then fallback
+	candidates := []Provider{selected}
+	if c.fallback != nil && c.fallback != selected && c.fallback.Available() {
+		candidates = append(candidates, c.fallback)
 	}
 
-	return resp, nil
+	var lastErr error
+	for _, provider := range candidates {
+		name := provider.Name()
+
+		// Skip providers in cooldown
+		if c.cooldowns.InCooldown(name) {
+			c.logger.Debug("skipping provider in cooldown", "provider", name)
+			continue
+		}
+
+		c.logger.Debug("routing request", "provider", name, "hint", req.Hint)
+
+		resp, err := provider.Complete(ctx, req)
+		if err == nil {
+			c.cooldowns.MarkSuccess(name)
+			return resp, nil
+		}
+
+		// Classify the error
+		reason := ClassifyError(err)
+		c.logger.Warn("provider failed",
+			"provider", name,
+			"error", err,
+			"reason", reason.String(),
+		)
+
+		// Non-retriable errors fail immediately (don't try fallback)
+		if !reason.Retriable() {
+			return CompletionResponse{}, err
+		}
+
+		// Retriable — mark cooldown and try next
+		c.cooldowns.MarkFailed(name)
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return CompletionResponse{}, lastErr
+	}
+	return CompletionResponse{}, fmt.Errorf("all providers in cooldown or unavailable")
 }
 
 func (c *ProviderChain) selectProvider(hint string) Provider {

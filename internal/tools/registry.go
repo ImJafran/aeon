@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/jafran/aeon/internal/providers"
 )
+
+const defaultToolTimeout = 60 * time.Second
 
 type Tool interface {
 	Name() string
@@ -18,21 +22,36 @@ type Tool interface {
 }
 
 type ToolResult struct {
-	ToolCallID string
-	ForLLM     string
-	ForUser    string
-	Silent     bool
+	ToolCallID    string
+	ForLLM        string
+	ForUser       string
+	Silent        bool
+	NeedsApproval bool   // If true, the tool execution needs human approval before proceeding
+	ApprovalInfo  string // Description of what needs approval
 }
 
 type Registry struct {
-	tools map[string]Tool
-	mu    sync.RWMutex
+	tools          map[string]Tool
+	mu             sync.RWMutex
+	defaultTimeout time.Duration
+	logger         *slog.Logger
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]Tool),
+		tools:          make(map[string]Tool),
+		defaultTimeout: defaultToolTimeout,
 	}
+}
+
+// SetLogger sets the logger for structured observability logging.
+func (r *Registry) SetLogger(l *slog.Logger) {
+	r.logger = l
+}
+
+// SetDefaultTimeout sets the timeout for tool execution.
+func (r *Registry) SetDefaultTimeout(d time.Duration) {
+	r.defaultTimeout = d
 }
 
 func (r *Registry) Register(tool Tool) {
@@ -59,7 +78,57 @@ func (r *Registry) Execute(ctx context.Context, name string, params json.RawMess
 	if !ok {
 		return ToolResult{}, fmt.Errorf("tool not found: %s", name)
 	}
-	return tool.Execute(ctx, params)
+
+	// Validate parameters before execution
+	if err := ValidateParams(tool.Parameters(), params); err != nil {
+		return ToolResult{ForLLM: fmt.Sprintf("Parameter validation error: %v", err)}, nil
+	}
+
+	start := time.Now()
+
+	// Enforce timeout: run tool in goroutine with deadline
+	timeout := r.defaultTimeout
+	if timeout <= 0 {
+		timeout = defaultToolTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	type result struct {
+		tr  ToolResult
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		tr, err := tool.Execute(ctx, params)
+		ch <- result{tr, err}
+	}()
+
+	select {
+	case res := <-ch:
+		if r.logger != nil {
+			r.logger.Debug("tool executed",
+				"tool", name,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"params_size", len(params),
+				"result_size", len(res.tr.ForLLM),
+				"error", res.err,
+			)
+		}
+		return res.tr, res.err
+	case <-ctx.Done():
+		if r.logger != nil {
+			r.logger.Warn("tool timed out",
+				"tool", name,
+				"timeout", timeout,
+				"duration_ms", time.Since(start).Milliseconds(),
+			)
+		}
+		return ToolResult{
+			ForLLM: fmt.Sprintf("Tool %q timed out after %v. The operation may still be running in the background.", name, timeout),
+		}, nil
+	}
 }
 
 // ToolDefs returns sorted tool definitions for provider (sorted for KV cache stability).

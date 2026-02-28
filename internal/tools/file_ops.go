@@ -10,11 +10,20 @@ import (
 
 const maxFileReadSize = 100 * 1024 // 100KB
 
+// PathChecker validates file paths against security policy.
+type PathChecker interface {
+	CheckPath(path string) (int, string) // 0=allowed, 1=denied
+}
+
 // ---- file_read ----
 
-type FileReadTool struct{}
+type FileReadTool struct {
+	security PathChecker
+}
 
 func NewFileRead() *FileReadTool { return &FileReadTool{} }
+
+func (t *FileReadTool) SetSecurity(s PathChecker) { t.security = s }
 
 func (t *FileReadTool) Name() string        { return "file_read" }
 func (t *FileReadTool) Description() string  { return "Read the contents of a file." }
@@ -49,6 +58,12 @@ func (t *FileReadTool) Execute(_ context.Context, params json.RawMessage) (ToolR
 	var p fileReadParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ToolResult{}, fmt.Errorf("parsing params: %w", err)
+	}
+
+	if t.security != nil {
+		if decision, reason := t.security.CheckPath(p.Path); decision != 0 {
+			return ToolResult{ForLLM: fmt.Sprintf("BLOCKED: %s", reason)}, nil
+		}
 	}
 
 	info, err := os.Stat(p.Path)
@@ -98,9 +113,13 @@ func (t *FileReadTool) Execute(_ context.Context, params json.RawMessage) (ToolR
 
 // ---- file_write ----
 
-type FileWriteTool struct{}
+type FileWriteTool struct {
+	security PathChecker
+}
 
 func NewFileWrite() *FileWriteTool { return &FileWriteTool{} }
+
+func (t *FileWriteTool) SetSecurity(s PathChecker) { t.security = s }
 
 func (t *FileWriteTool) Name() string        { return "file_write" }
 func (t *FileWriteTool) Description() string  { return "Create or overwrite a file with the given content." }
@@ -132,6 +151,12 @@ func (t *FileWriteTool) Execute(_ context.Context, params json.RawMessage) (Tool
 		return ToolResult{}, fmt.Errorf("parsing params: %w", err)
 	}
 
+	if t.security != nil {
+		if decision, reason := t.security.CheckPath(p.Path); decision != 0 {
+			return ToolResult{ForLLM: fmt.Sprintf("BLOCKED: %s", reason)}, nil
+		}
+	}
+
 	if err := os.WriteFile(p.Path, []byte(p.Content), 0644); err != nil {
 		return ToolResult{ForLLM: fmt.Sprintf("Error: %v", err)}, nil
 	}
@@ -141,9 +166,13 @@ func (t *FileWriteTool) Execute(_ context.Context, params json.RawMessage) (Tool
 
 // ---- file_edit ----
 
-type FileEditTool struct{}
+type FileEditTool struct {
+	security PathChecker
+}
 
 func NewFileEdit() *FileEditTool { return &FileEditTool{} }
+
+func (t *FileEditTool) SetSecurity(s PathChecker) { t.security = s }
 
 func (t *FileEditTool) Name() string        { return "file_edit" }
 func (t *FileEditTool) Description() string  { return "Edit a file by replacing an exact string match with new content." }
@@ -183,6 +212,12 @@ func (t *FileEditTool) Execute(_ context.Context, params json.RawMessage) (ToolR
 	var p fileEditParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ToolResult{}, fmt.Errorf("parsing params: %w", err)
+	}
+
+	if t.security != nil {
+		if decision, reason := t.security.CheckPath(p.Path); decision != 0 {
+			return ToolResult{ForLLM: fmt.Sprintf("BLOCKED: %s", reason)}, nil
+		}
 	}
 
 	data, err := os.ReadFile(p.Path)

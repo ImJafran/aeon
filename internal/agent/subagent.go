@@ -19,8 +19,24 @@ type SubagentTask struct {
 	StartedAt   time.Time
 	Cancel      context.CancelFunc
 	Done        chan struct{}
-	Result      string
-	Error       error
+	mu          sync.Mutex
+	result      string
+	err         error
+}
+
+// SetResult safely stores the result and error for a completed task.
+func (t *SubagentTask) SetResult(result string, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.result = result
+	t.err = err
+}
+
+// GetResult safely retrieves the result and error from a task.
+func (t *SubagentTask) GetResult() (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.result, t.err
 }
 
 // SubagentManager manages background subagent tasks.
@@ -85,14 +101,18 @@ func (m *SubagentManager) Spawn(ctx context.Context, description, channel, chatI
 		}()
 
 		result, err := m.runSubagent(taskCtx, description)
-		task.Result = result
-		task.Error = err
+		task.SetResult(result, err)
 
 		var content string
 		if err != nil {
 			content = fmt.Sprintf("[Task %s completed with error]\nTask: %s\nError: %v", taskID, description, err)
 		} else {
 			content = fmt.Sprintf("[Task %s completed]\nTask: %s\nResult: %s", taskID, description, result)
+		}
+
+		// Scrub credentials before sending to user
+		if m.scrubber != nil {
+			content = m.scrubber.ScrubCredentials(content)
 		}
 
 		m.msgBus.Send(bus.OutboundMessage{

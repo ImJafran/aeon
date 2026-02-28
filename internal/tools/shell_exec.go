@@ -74,8 +74,10 @@ func (t *ShellExecTool) Execute(ctx context.Context, params json.RawMessage) (To
 			return ToolResult{ForLLM: fmt.Sprintf("BLOCKED: %s", reason)}, nil
 		case 2: // NeedsApproval
 			return ToolResult{
-				ForLLM:  fmt.Sprintf("REQUIRES APPROVAL: %s\nCommand: %s", reason, p.Command),
-				ForUser: fmt.Sprintf("⚠️ Command requires approval: %s\nReason: %s", p.Command, reason),
+				ForLLM:        fmt.Sprintf("REQUIRES APPROVAL: %s\nCommand: %s", reason, p.Command),
+				ForUser:       fmt.Sprintf("⚠️ Command requires approval: %s\nReason: %s", p.Command, reason),
+				NeedsApproval: true,
+				ApprovalInfo:  fmt.Sprintf("Command: %s\nReason: %s", p.Command, reason),
 			}, nil
 		}
 	}

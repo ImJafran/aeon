@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -98,7 +99,15 @@ type MemoryConfig struct {
 }
 
 type AgentConfig struct {
-	SystemPrompt string `yaml:"system_prompt"`
+	SystemPrompt       string `yaml:"system_prompt"`
+	MaxHistoryMessages int    `yaml:"max_history_messages"` // max messages to load into context (default: 20)
+	MaxIterations      int    `yaml:"max_iterations"`       // max tool iterations per turn (default: 20)
+	MaxOutputLen       int    `yaml:"max_output_len"`       // max shell output chars (default: 10000)
+	ShellTimeout       string `yaml:"shell_timeout"`        // default shell_exec timeout (default: "30s")
+	ProviderTimeout    string `yaml:"provider_timeout"`     // HTTP timeout for providers (default: "120s")
+	MaxTokens          int    `yaml:"max_tokens"`           // max tokens for LLM response (default: 4096)
+	DailyTokenLimit    int    `yaml:"daily_token_limit"`    // daily token limit, 0=unlimited
+	ToolTimeout        string `yaml:"tool_timeout"`         // default tool execution timeout (default: "60s")
 }
 
 type LogConfig struct {
@@ -177,6 +186,27 @@ func applyDefaults(cfg *Config) {
 	if cfg.Memory.CompactionThreshold == 0 {
 		cfg.Memory.CompactionThreshold = 10
 	}
+	if cfg.Agent.MaxHistoryMessages == 0 {
+		cfg.Agent.MaxHistoryMessages = 20
+	}
+	if cfg.Agent.MaxIterations == 0 {
+		cfg.Agent.MaxIterations = 20
+	}
+	if cfg.Agent.MaxOutputLen == 0 {
+		cfg.Agent.MaxOutputLen = 10000
+	}
+	if cfg.Agent.ShellTimeout == "" {
+		cfg.Agent.ShellTimeout = "30s"
+	}
+	if cfg.Agent.ProviderTimeout == "" {
+		cfg.Agent.ProviderTimeout = "120s"
+	}
+	if cfg.Agent.MaxTokens == 0 {
+		cfg.Agent.MaxTokens = 4096
+	}
+	if cfg.Agent.ToolTimeout == "" {
+		cfg.Agent.ToolTimeout = "60s"
+	}
 	if cfg.Agent.SystemPrompt == "" {
 		cfg.Agent.SystemPrompt = `You are Aeon, a persistent AI assistant on the user's system. You have tools — use them, don't describe them.
 
@@ -203,8 +233,55 @@ Rules:
 var NoProvider = fmt.Errorf("no LLM provider configured — running in echo mode")
 
 func validate(cfg *Config) error {
-	// No longer fatal — agent loop handles nil provider with echo mode
+	// Validate log level
+	switch strings.ToLower(cfg.Log.Level) {
+	case "debug", "info", "warn", "warning", "error":
+		// valid
+	default:
+		return fmt.Errorf("invalid log level %q (must be debug/info/warn/error)", cfg.Log.Level)
+	}
+
+	// Validate duration strings
+	durations := map[string]string{
+		"security.approval_timeout": cfg.Security.ApprovalTimeout,
+		"agent.shell_timeout":       cfg.Agent.ShellTimeout,
+		"agent.provider_timeout":    cfg.Agent.ProviderTimeout,
+		"agent.tool_timeout":        cfg.Agent.ToolTimeout,
+	}
+	for name, val := range durations {
+		if val != "" {
+			if _, err := time.ParseDuration(val); err != nil {
+				return fmt.Errorf("invalid duration for %s: %q (%v)", name, val, err)
+			}
+		}
+	}
+
+	// Validate allowed_paths are resolvable
+	for _, p := range cfg.Security.AllowedPaths {
+		expanded := expandHome(p)
+		if _, err := filepath.Abs(expanded); err != nil {
+			return fmt.Errorf("cannot resolve allowed_path %q: %v", p, err)
+		}
+	}
+
+	// Warn on unexpanded env vars in API keys (starts with ${)
+	if c := cfg.Provider.Anthropic; c != nil && c.Enabled && strings.HasPrefix(c.APIKey, "${") {
+		return fmt.Errorf("anthropic api_key contains unexpanded env var: %s", c.APIKey)
+	}
+	if c := cfg.Provider.Gemini; c != nil && c.Enabled && strings.HasPrefix(c.APIKey, "${") {
+		return fmt.Errorf("gemini api_key contains unexpanded env var: %s", c.APIKey)
+	}
+
 	return nil
+}
+
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[1:])
+		}
+	}
+	return path
 }
 
 // HasProvider returns true if at least one provider is configured.

@@ -68,7 +68,19 @@ func initSchema(db *sql.DB) error {
 			tags TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
+		);`
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Migration: add access_count column if missing
+	var colCount int
+	err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name='access_count'`).Scan(&colCount)
+	if err == nil && colCount == 0 {
+		db.Exec(`ALTER TABLE memories ADD COLUMN access_count INTEGER DEFAULT 0`)
+	}
+
+	rest := `
 
 		CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 			content,
@@ -100,7 +112,7 @@ func initSchema(db *sql.DB) error {
 
 		CREATE INDEX IF NOT EXISTS idx_history_session ON conversation_history(session_id);
 	`
-	_, err := db.Exec(schema)
+	_, err = db.Exec(rest)
 	return err
 }
 
@@ -116,7 +128,8 @@ func (s *Store) MemStore(_ context.Context, category Category, content, tags str
 	return result.LastInsertId()
 }
 
-// Recall searches memories using FTS5 keyword search.
+// Recall searches memories using FTS5 keyword search with composite relevance scoring.
+// Combines FTS5 rank with recency weighting.
 func (s *Store) Recall(_ context.Context, query string, limit int) ([]Entry, error) {
 	if limit <= 0 {
 		limit = 5
@@ -127,7 +140,7 @@ func (s *Store) Recall(_ context.Context, query string, limit int) ([]Entry, err
 		FROM memories_fts fts
 		JOIN memories m ON m.id = fts.rowid
 		WHERE memories_fts MATCH ?
-		ORDER BY rank
+		ORDER BY rank * (1.0 + 0.5 / (1.0 + julianday('now') - julianday(m.accessed_at)))
 		LIMIT ?
 	`, query, limit)
 	if err != nil {
@@ -136,7 +149,17 @@ func (s *Store) Recall(_ context.Context, query string, limit int) ([]Entry, err
 	}
 	defer rows.Close()
 
-	return scanEntries(rows)
+	entries, err := scanEntries(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Increment access_count for returned entries
+	for _, e := range entries {
+		s.db.Exec("UPDATE memories SET access_count = COALESCE(access_count, 0) + 1, accessed_at = CURRENT_TIMESTAMP WHERE id = ?", e.ID)
+	}
+
+	return entries, nil
 }
 
 func (s *Store) recallLike(query string, limit int) ([]Entry, error) {

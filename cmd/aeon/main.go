@@ -6,22 +6,16 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
-	"github.com/jafran/aeon/internal/agent"
 	"github.com/jafran/aeon/internal/bootstrap"
-	"github.com/jafran/aeon/internal/bus"
 	"github.com/jafran/aeon/internal/channels"
 	"github.com/jafran/aeon/internal/config"
-	"github.com/jafran/aeon/internal/memory"
-	"github.com/jafran/aeon/internal/providers"
-	"github.com/jafran/aeon/internal/scheduler"
-	"github.com/jafran/aeon/internal/security"
-	"github.com/jafran/aeon/internal/skills"
-	"github.com/jafran/aeon/internal/tools"
 )
+
+const shutdownTimeout = 10 * time.Second
 
 var version = "0.1.0"
 
@@ -133,137 +127,61 @@ func runInteractive() {
 		os.Exit(1)
 	}
 
-	home := config.AeonHome()
-
-	// Setup context with signal handling
+	// Setup context with graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Println("\nShutting down...")
+		fmt.Println("\nShutting down gracefully (10s timeout)...")
 		cancel()
+		// Start forced shutdown timer
+		timer := time.NewTimer(shutdownTimeout)
+		defer timer.Stop()
+		select {
+		case <-sigCh:
+			fmt.Println("\nForced shutdown.")
+			os.Exit(1)
+		case <-timer.C:
+			fmt.Println("\nShutdown timed out. Forcing exit.")
+			os.Exit(1)
+		}
 	}()
 
-	// Setup logging (configurable level from config)
+	// Setup logging
 	logLevel := parseLogLevel(cfg.Log.Level)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: logLevel,
 	}))
 
-	// Initialize message bus
-	msgBus := bus.New(64)
-
-	// Initialize security policy
-	secPolicy := security.NewPolicy(cfg.Security.DenyPatterns, cfg.Security.AllowedPaths)
-	secAdapter := security.NewAdapter(secPolicy)
-
-	// Initialize memory store
-	dbPath := filepath.Join(home, "aeon.db")
-	memStore, err := memory.NewStore(dbPath)
+	// Build all shared dependencies
+	deps, err := bootstrap.BuildDeps(cfg, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer memStore.Close()
+	defer deps.Close()
 
-	memCount, _ := memStore.Count(context.Background())
-	logger.Info("memory store ready", "path", dbPath, "entries", memCount)
-
-	// Initialize tool registry with DNA tools
-	registry := tools.NewRegistry()
-	shellExec := tools.RegisterDNATools(registry)
-	shellExec.SetSecurity(secAdapter)
-
-	// Register memory tools
-	registry.Register(tools.NewMemoryStore(memStore))
-	registry.Register(tools.NewMemoryRecall(memStore))
-
-	// Initialize skill system
-	skillsDir := filepath.Join(home, "skills")
-	venvPath := filepath.Join(home, "base_venv")
-	skillLoader := skills.NewLoader(skillsDir, venvPath)
-	if err := skillLoader.LoadAll(); err != nil {
-		logger.Warn("failed to load skills", "error", err)
-	}
-	logger.Info("skills loaded", "count", skillLoader.Count())
-
-	// Register skill tools
-	registry.Register(tools.NewSkillFactory(skillLoader))
-	registry.Register(tools.NewFindSkills(skillLoader))
-	registry.Register(tools.NewReadSkill(skillLoader))
-	registry.Register(tools.NewRunSkill(skillLoader))
-
-	// Initialize scheduler (shares the same SQLite database)
-	sched, err := scheduler.New(memStore.DB(), logger)
-	if err != nil {
-		logger.Warn("failed to initialize scheduler", "error", err)
-	} else {
-		sched.OnTrigger(func(job scheduler.Job) {
-			// One-shot reminders → send directly to user
-			if scheduler.IsOneShot(job.Schedule) {
-				// Notify all allowed Telegram users
-				if cfg.Channels.Telegram != nil {
-					for _, uid := range cfg.Channels.Telegram.AllowedUsers {
-						msgBus.Send(bus.OutboundMessage{
-							Channel: "telegram",
-							ChatID:  fmt.Sprintf("%d", uid),
-							Content: fmt.Sprintf("Reminder: %s", job.Command),
-						})
-					}
-				}
-				return
-			}
-			// Recurring jobs → process through agent loop
-			msgBus.Publish(bus.InboundMessage{
-				Channel: "system",
-				Content: fmt.Sprintf("[cron:%s] %s", job.Name, job.Command),
-			})
-		})
-		sched.Start(ctx)
-		registry.Register(tools.NewCronManage(sched))
-	}
-	logger.Info("tools registered", "count", registry.Count())
-
-	// Initialize provider chain
-	provider, err := providers.FromConfig(cfg, logger)
-	if err != nil {
-		logger.Warn("no provider available, running in echo mode", "error", err)
-	}
-
-	// Initialize subagent manager
-	subMgr := agent.NewSubagentManager(provider, registry, msgBus, logger)
-	subMgr.SetScrubber(secAdapter)
-	registry.Register(tools.NewSpawnAgent(subMgr))
-	registry.Register(tools.NewListTasks(subMgr))
-
-	// Initialize agent loop with credential scrubbing
-	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
-	loop.SetScrubber(secAdapter)
-	loop.SetSubagentManager(subMgr)
-	loop.SetMemoryStore(memStore)
-	loop.SetSystemPrompt(cfg.Agent.SystemPrompt)
+	// Setup and start scheduler
+	deps.SetupSchedulerTrigger()
+	deps.StartScheduler(ctx)
 
 	// Print banner
+	home := config.AeonHome()
 	providerCount := config.EnabledProviderCount(cfg)
-	skillCount := skillLoader.Count()
-	cronCount := 0
-	if sched != nil {
-		cronCount, _ = sched.Count()
-	}
 	fmt.Printf("\n🌱 Aeon v%s — The Self-Evolving Kernel\n", version)
 	fmt.Printf("   Providers: %d configured\n", providerCount)
-	fmt.Printf("   Tools: %d loaded\n", registry.Count())
-	fmt.Printf("   Skills: %d loaded\n", skillCount)
-	fmt.Printf("   Memory: %d entries\n", memCount)
-	fmt.Printf("   Cron: %d jobs\n", cronCount)
+	fmt.Printf("   Tools: %d loaded\n", deps.Registry.Count())
+	fmt.Printf("   Skills: %d loaded\n", deps.SkillLoader.Count())
+	fmt.Printf("   Memory: %d entries\n", deps.MemCount)
+	fmt.Printf("   Cron: %d jobs\n", deps.CronCount)
 	fmt.Printf("   Home: %s\n\n", home)
 
 	// Start CLI channel
 	cli := channels.NewCLI()
-	if err := cli.Start(ctx, msgBus); err != nil {
+	if err := cli.Start(ctx, deps.Bus); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting CLI channel: %v\n", err)
 		os.Exit(1)
 	}
@@ -275,7 +193,7 @@ func runInteractive() {
 		if cfg.Provider.Gemini != nil && cfg.Provider.Gemini.APIKey != "" {
 			tg.SetTranscriber(channels.NewGeminiTranscriber(cfg.Provider.Gemini.APIKey, cfg.Provider.Gemini.DefaultModel))
 		}
-		if err := tg.Start(ctx, msgBus); err != nil {
+		if err := tg.Start(ctx, deps.Bus); err != nil {
 			logger.Error("failed to start telegram channel", "error", err)
 		} else {
 			logger.Info("telegram channel started")
@@ -283,14 +201,13 @@ func runInteractive() {
 	}
 
 	// Run agent loop (blocks until context cancelled)
-	loop.Run(ctx)
+	deps.Loop.Run(ctx)
 
 	// Cleanup
 	cli.Stop()
 	if tg != nil {
 		tg.Stop()
 	}
-	msgBus.Close()
 }
 
 func runServe() {
@@ -311,106 +228,65 @@ func runServe() {
 		os.Exit(1)
 	}
 
-	home := config.AeonHome()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Println("\nShutting down...")
+		fmt.Println("\nShutting down gracefully (10s timeout)...")
 		cancel()
+		timer := time.NewTimer(shutdownTimeout)
+		defer timer.Stop()
+		select {
+		case <-sigCh:
+			fmt.Println("\nForced shutdown.")
+			os.Exit(1)
+		case <-timer.C:
+			fmt.Println("\nShutdown timed out. Forcing exit.")
+			os.Exit(1)
+		}
 	}()
 
+	logLevel := parseLogLevel(cfg.Log.Level)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logLevel,
 	}))
 
-	msgBus := bus.New(64)
-
-	secPolicy := security.NewPolicy(cfg.Security.DenyPatterns, cfg.Security.AllowedPaths)
-	secAdapter := security.NewAdapter(secPolicy)
-
-	dbPath := filepath.Join(home, "aeon.db")
-	memStore, err := memory.NewStore(dbPath)
+	// Build all shared dependencies
+	deps, err := bootstrap.BuildDeps(cfg, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer memStore.Close()
+	defer deps.Close()
 
-	registry := tools.NewRegistry()
-	shellExec := tools.RegisterDNATools(registry)
-	shellExec.SetSecurity(secAdapter)
-	registry.Register(tools.NewMemoryStore(memStore))
-	registry.Register(tools.NewMemoryRecall(memStore))
-
-	skillsDir := filepath.Join(home, "skills")
-	venvPath := filepath.Join(home, "base_venv")
-	skillLoader := skills.NewLoader(skillsDir, venvPath)
-	skillLoader.LoadAll()
-	registry.Register(tools.NewSkillFactory(skillLoader))
-	registry.Register(tools.NewFindSkills(skillLoader))
-	registry.Register(tools.NewReadSkill(skillLoader))
-	registry.Register(tools.NewRunSkill(skillLoader))
-
-	sched, err := scheduler.New(memStore.DB(), logger)
-	if err == nil {
-		sched.OnTrigger(func(job scheduler.Job) {
-			if scheduler.IsOneShot(job.Schedule) {
-				for _, uid := range cfg.Channels.Telegram.AllowedUsers {
-					msgBus.Send(bus.OutboundMessage{
-						Channel: "telegram",
-						ChatID:  fmt.Sprintf("%d", uid),
-						Content: fmt.Sprintf("Reminder: %s", job.Command),
-					})
-				}
-				return
-			}
-			msgBus.Publish(bus.InboundMessage{
-				Channel: "system",
-				Content: fmt.Sprintf("[cron:%s] %s", job.Name, job.Command),
-			})
-		})
-		sched.Start(ctx)
-		registry.Register(tools.NewCronManage(sched))
-	}
-
-	provider, err := providers.FromConfig(cfg, logger)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: no provider available: %v\n", err)
+	if deps.Provider == nil {
+		fmt.Fprintf(os.Stderr, "Error: no provider available for serve mode\n")
 		os.Exit(1)
 	}
 
-	subMgr := agent.NewSubagentManager(provider, registry, msgBus, logger)
-	subMgr.SetScrubber(secAdapter)
-	registry.Register(tools.NewSpawnAgent(subMgr))
-	registry.Register(tools.NewListTasks(subMgr))
+	// Setup and start scheduler
+	deps.SetupSchedulerTrigger()
+	deps.StartScheduler(ctx)
 
-	loop := agent.NewAgentLoop(msgBus, provider, registry, logger)
-	loop.SetScrubber(secAdapter)
-	loop.SetSubagentManager(subMgr)
-	loop.SetMemoryStore(memStore)
-	loop.SetSystemPrompt(cfg.Agent.SystemPrompt)
-
+	// Start Telegram channel
 	tg := channels.NewTelegram(cfg.Channels.Telegram.BotToken, cfg.Channels.Telegram.AllowedUsers, logger)
 	if cfg.Provider.Gemini != nil && cfg.Provider.Gemini.APIKey != "" {
 		tg.SetTranscriber(channels.NewGeminiTranscriber(cfg.Provider.Gemini.APIKey, cfg.Provider.Gemini.DefaultModel))
 	}
-	if err := tg.Start(ctx, msgBus); err != nil {
+	if err := tg.Start(ctx, deps.Bus); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting Telegram: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Printf("🌱 Aeon v%s — Daemon Mode (Telegram)\n", version)
-	fmt.Printf("   Tools: %d | Skills: %d | Listening...\n\n", registry.Count(), skillLoader.Count())
+	fmt.Printf("   Tools: %d | Skills: %d | Listening...\n\n", deps.Registry.Count(), deps.SkillLoader.Count())
 
-	loop.Run(ctx)
+	deps.Loop.Run(ctx)
 
 	tg.Stop()
-	msgBus.Close()
 }
 
 func printUsage() {
