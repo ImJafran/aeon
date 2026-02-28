@@ -96,16 +96,22 @@ if [ -f "$GOBIN/aeon" ]; then
 
     # Try to also install to /usr/local/bin (optional, non-fatal)
     if [ "$INSTALL_DIR" != "/usr/local/bin" ]; then
+        set +e
         if [ -w "/usr/local/bin" ]; then
-            cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon && chmod +x /usr/local/bin/aeon \
-                && echo "  Linked to /usr/local/bin/aeon"
-        elif command -v sudo &> /dev/null; then
-            sudo cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon && sudo chmod +x /usr/local/bin/aeon \
-                && echo "  Linked to /usr/local/bin/aeon" \
-                || echo "  Skipped /usr/local/bin (no permission). 'aeon' works from $INSTALL_DIR"
+            cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon 2>/dev/null && chmod +x /usr/local/bin/aeon 2>/dev/null
         else
-            echo "  Skipped /usr/local/bin (no sudo). 'aeon' works from $INSTALL_DIR"
+            sudo cp "$INSTALL_DIR/aeon" /usr/local/bin/aeon 2>/dev/null && sudo chmod +x /usr/local/bin/aeon 2>/dev/null
         fi
+        if [ $? -eq 0 ]; then
+            echo "  Linked to /usr/local/bin/aeon"
+        else
+            echo ""
+            echo "  ⚠ Could not copy to /usr/local/bin (permission denied)."
+            echo "    To fix, run:  sudo cp $INSTALL_DIR/aeon /usr/local/bin/aeon && sudo chmod +x /usr/local/bin/aeon"
+            echo "    Or just use:  $INSTALL_DIR/aeon"
+            echo ""
+        fi
+        set -e
     fi
 fi
 
