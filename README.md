@@ -119,6 +119,15 @@ $ aeon init
 
 All config lives in `~/.aeon/config.json`. See [`config.example.json`](config.example.json) for the full template.
 
+> **Note:** After editing the config, restart Aeon to apply changes:
+> ```bash
+> # If running as a systemd service
+> sudo systemctl restart aeon
+>
+> # If running manually, just Ctrl+C and re-run
+> aeon serve
+> ```
+
 ```json
 {
   "provider": {
