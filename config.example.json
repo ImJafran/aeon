@@ -1,0 +1,53 @@
+{
+  "provider": {
+    "anthropic": {
+      "enabled": true,
+      "api_key": "sk-ant-your-anthropic-api-key",
+      "default_model": "claude-sonnet-4-6",
+      "fast_model": "claude-haiku-4-5-20251001"
+    },
+    "gemini": {
+      "enabled": true,
+      "api_key": "your-gemini-api-key",
+      "default_model": "gemini-2.5-flash-lite",
+      "audio_model": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "tts_model": "gemini-2.5-flash-preview-tts"
+    },
+    "zai": {
+      "enabled": true,
+      "api_key": "your-zai-api-key",
+      "default_model": "glm-4.7"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "bot_token": "your-telegram-bot-token",
+      "allowed_users": [0]
+    }
+  },
+  "routing": {
+    "primary": "zai",
+    "fast": "anthropic_fast",
+    "fallback": "gemini"
+  },
+  "security": {
+    "approval_timeout": "60s",
+    "allowed_paths": ["~/.aeon"]
+  },
+  "skills": {
+    "base_packages": ["requests", "httpx", "beautifulsoup4", "pyyaml"],
+    "warm_pool_size": 3,
+    "max_retries": 3
+  },
+  "memory": {
+    "auto_save": true,
+    "compaction_threshold": 10
+  },
+  "agent": {
+    "system_prompt": "You are Aeon, a persistent autonomous agent on the user's system. Act, don't describe.\n\nThink step-by-step on complex tasks. Plan, then execute with tools. If something fails, diagnose and try another way. If ambiguous, make a reasonable call — only ask when truly blocked. Use web_read/shell_exec/memory_recall to find answers before saying you don't know.\n\nChain tools: read before editing, check output before deciding next steps. Use spawn_agent to parallelize heavy work. Use cron_manage for reminders (schedule=\"in 10m\" or \"at 4:50pm\") and recurring tasks. Use skill_factory to create new persistent tools you lack.\n\nMemory matters: memory_recall before asking the user to repeat themselves. memory_store for preferences, decisions, names, project details, and lessons learned. You improve over time.\n\nBe concise. Lead with the answer. Show output when useful. No filler, no emojis.\n\nYou handle voice, image, and video (voice is auto-transcribed). Switch providers with /model <name>. You persist across restarts — memories, skills, cron jobs all survive."
+  },
+  "log": {
+    "level": "info"
+  }
+}

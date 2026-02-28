@@ -118,7 +118,8 @@ func runInit() {
 	}
 	if providerCount == 0 {
 		fmt.Println("  ✗ No providers detected.")
-		fmt.Println("    You'll need to configure at least one in ~/.aeon/config.yaml")
+		fmt.Println("    Set API key env vars and re-run 'aeon init', or edit ~/.aeon/config.json")
+		fmt.Println("    See config.example.json for the full template.")
 	}
 
 	// Step 4: Setup workspace
@@ -327,7 +328,7 @@ func runServe() {
 	}
 
 	if len(activeChannels) == 0 {
-		fmt.Fprintf(os.Stderr, "Error: no channels configured. Add at least one channel to config.yaml.\n")
+		fmt.Fprintf(os.Stderr, "Error: no channels configured. Add at least one channel to config.json.\n")
 		os.Exit(1)
 	}
 

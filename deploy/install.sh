@@ -109,12 +109,12 @@ fi
 echo ""
 
 # Run init if not already configured
-if [ ! -f "$AEON_HOME/config.yaml" ]; then
+if [ ! -f "$AEON_HOME/config.json" ]; then
     echo "  Running first-time setup..."
     echo ""
     "$INSTALL_DIR/aeon" init
 else
-    echo "  Config already exists at $AEON_HOME/config.yaml"
+    echo "  Config already exists at $AEON_HOME/config.json"
 fi
 
 echo ""

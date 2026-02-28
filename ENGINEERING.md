@@ -97,7 +97,7 @@ Built dynamically at every turn, layered:
 
 1. **SOUL.md** — agent identity/personality (`~/.aeon/workspace/SOUL.md`)
 2. **AGENT.md** — behavior rules (`~/.aeon/workspace/AGENT.md`)
-3. **config.yaml `system_prompt`** — user overrides
+3. **config.json `system_prompt`** — user overrides
 4. **Memory context** — relevant memories injected from FTS5 search on user message
 5. **Runtime context** — current provider, timestamp, skill count, active tasks, recent errors
 6. **Safety boundary** — warning about trusting tool output (prompt injection defense)
@@ -270,7 +270,7 @@ Applied to **all** tool output before it enters conversation history:
 
 ### 4. Path Containment
 
-File operations checked against allowed directories (configurable in `config.yaml`). Symlinks resolved before checking.
+File operations checked against allowed directories (configurable in `config.json`). Symlinks resolved before checking.
 
 ### 5. Failure Circuit Breaker
 
@@ -331,7 +331,7 @@ At least one LLM provider is required. Multiple providers enable routing and fai
 
 ### Routing
 
-Three roles assignable in `config.yaml`:
+Three roles assignable in `config.json`:
 
 - **primary** — default for all requests
 - **fast** — used for lightweight tasks (e.g., memory consolidation)
@@ -368,7 +368,7 @@ internal/
     transcribe.go          # Gemini audio transcription
 
   config/
-    config.go              # YAML config loading, provider routing
+    config.go              # JSON config loading, provider routing
 
   memory/
     store.go               # SQLite FTS5 memory + conversation history
@@ -401,7 +401,7 @@ deploy/
   aeon.service             # systemd service unit
   install.sh               # installation script
 
-config.example.yaml        # example configuration
+config.example.json        # example configuration
 Dockerfile                 # multi-stage build (builder + runtime)
 docker-compose.yml         # dev, test, serve services
 Makefile                   # build targets
@@ -657,7 +657,7 @@ sqlite3 ~/.aeon/aeon.db ".tables"
 
 | Issue | Cause | Fix |
 |---|---|---|
-| "no providers configured" | Missing API keys | Add keys to `~/.aeon/config.yaml` |
+| "no providers configured" | Missing API keys | Add keys to `~/.aeon/config.json` |
 | Skills disabled | 3+ consecutive failures | Fix the skill code, call `skill_factory` with `update=true` |
 | Cron jobs not firing | Auto-paused after 5 failures | Check `cron_manage list`, fix underlying issue |
 | Voice not working | Missing ffmpeg | Run `aeon init` to install |

@@ -8,7 +8,7 @@ services:
       - go-cache:/root/.cache/go-build
       - go-mod:/go/pkg/mod
       - aeon-data:/tmp/aeon-dev
-      - ./config.yaml:/tmp/aeon-dev/config.yaml
+      - ./config.json:/tmp/aeon-dev/config.json
     working_dir: /app
     command: ["sh", "-c", "make build && ./bin/aeon init && ./bin/aeon"]
     tty: true
@@ -26,7 +26,7 @@ services:
       - go-cache:/root/.cache/go-build
       - go-mod:/go/pkg/mod
       - aeon-data:/tmp/aeon-dev
-      - ./config.yaml:/tmp/aeon-dev/config.yaml
+      - ./config.json:/tmp/aeon-dev/config.json
     working_dir: /app
     command: ["sh", "-c", "make build && ./bin/aeon init && ./bin/aeon serve"]
     environment:

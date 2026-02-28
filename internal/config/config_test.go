@@ -8,15 +8,17 @@ import (
 
 func TestLoadValidConfig(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgPath := filepath.Join(dir, "config.json")
 
-	content := `
-provider:
-  anthropic:
-    enabled: true
-    api_key: "sk-test-key-1234567890"
-    default_model: "claude-sonnet-4-20250514"
-`
+	content := `{
+  "provider": {
+    "anthropic": {
+      "enabled": true,
+      "api_key": "sk-test-key-1234567890",
+      "default_model": "claude-sonnet-4-20250514"
+    }
+  }
+}`
 	os.WriteFile(cfgPath, []byte(content), 0644)
 
 	cfg, err := Load(cfgPath)
@@ -30,12 +32,13 @@ provider:
 
 func TestLoadConfigNoProvider(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgPath := filepath.Join(dir, "config.json")
 
-	content := `
-log:
-  level: info
-`
+	content := `{
+  "log": {
+    "level": "info"
+  }
+}`
 	os.WriteFile(cfgPath, []byte(content), 0644)
 
 	cfg, err := Load(cfgPath)
@@ -67,13 +70,15 @@ func TestEnvVarNoExpansion(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgPath := filepath.Join(dir, "config.json")
 
-	content := `
-provider:
-  claude_cli:
-    enabled: true
-`
+	content := `{
+  "provider": {
+    "claude_cli": {
+      "enabled": true
+    }
+  }
+}`
 	os.WriteFile(cfgPath, []byte(content), 0644)
 
 	cfg, err := Load(cfgPath)

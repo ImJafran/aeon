@@ -69,7 +69,7 @@ func FromConfig(cfg *config.Config, logger *slog.Logger) (Provider, error) {
 	}
 
 	if len(available) == 0 {
-		return nil, fmt.Errorf("no providers available. Configure at least one in config.yaml")
+		return nil, fmt.Errorf("no providers available. Configure at least one in config.json")
 	}
 
 	// If only one provider, use it for everything

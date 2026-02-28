@@ -33,7 +33,7 @@ vendor/
 
 # Secrets
 .env*
-config.yaml
+config.json
 *.pem
 *.key
 

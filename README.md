@@ -76,7 +76,7 @@ make install    # builds + installs to ~/.local/bin/aeon
 aeon init
 
 # 2. Add your API keys
-nano ~/.aeon/config.yaml
+nano ~/.aeon/config.json
 
 # 3. Run
 aeon              # interactive CLI
@@ -107,7 +107,7 @@ $ aeon init
 
 [4/4] Setting up workspace...
   ✓ Workspace created at ~/.aeon
-  ✓ Config written to ~/.aeon/config.yaml
+  ✓ Config written to ~/.aeon/config.json
   ✓ Base Python environment ready
 
 ✓ Setup complete!
@@ -117,33 +117,40 @@ $ aeon init
 
 ## Configuration
 
-All config lives in `~/.aeon/config.yaml`. See [`config.example.yaml`](config.example.yaml) for the full template.
+All config lives in `~/.aeon/config.json`. See [`config.example.json`](config.example.json) for the full template.
 
-```yaml
-provider:
-  zai:
-    enabled: true
-    api_key: your-zai-api-key
-    default_model: glm-4.7
-  anthropic:
-    enabled: true
-    api_key: sk-ant-your-key
-    default_model: claude-sonnet-4-6
-  gemini:
-    enabled: true
-    api_key: your-gemini-key
-    default_model: gemini-2.5-flash-lite
-
-channels:
-  telegram:
-    enabled: true
-    bot_token: "your-telegram-bot-token"
-    allowed_users: [your_telegram_user_id]
-
-routing:
-  primary: zai
-  fast: anthropic_fast
-  fallback: gemini
+```json
+{
+  "provider": {
+    "zai": {
+      "enabled": true,
+      "api_key": "your-zai-api-key",
+      "default_model": "glm-4.7"
+    },
+    "anthropic": {
+      "enabled": true,
+      "api_key": "sk-ant-your-key",
+      "default_model": "claude-sonnet-4-6"
+    },
+    "gemini": {
+      "enabled": true,
+      "api_key": "your-gemini-key",
+      "default_model": "gemini-2.5-flash-lite"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "bot_token": "your-telegram-bot-token",
+      "allowed_users": [0]
+    }
+  },
+  "routing": {
+    "primary": "zai",
+    "fast": "anthropic_fast",
+    "fallback": "gemini"
+  }
+}
 ```
 
 ### Supported Providers
@@ -159,7 +166,7 @@ routing:
 ### Telegram Bot Setup
 
 1. Message [@BotFather](https://t.me/BotFather) -> `/newbot`
-2. Copy the token into `config.yaml` -> `channels.telegram.bot_token`
+2. Copy the token into `config.json` -> `channels.telegram.bot_token`
 3. Get your user ID from [@userinfobot](https://t.me/userinfobot)
 4. Add it to `channels.telegram.allowed_users`
 5. Restart Aeon

@@ -1,126 +1,125 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Provider  ProviderConfig  `yaml:"provider"`
-	Routing   RoutingConfig   `yaml:"routing"`
-	Channels  ChannelsConfig  `yaml:"channels"`
-	Security  SecurityConfig  `yaml:"security"`
-	Skills    SkillsConfig    `yaml:"skills"`
-	Scheduler SchedulerConfig `yaml:"scheduler"`
-	Memory    MemoryConfig    `yaml:"memory"`
-	Agent     AgentConfig     `yaml:"agent"`
-	Log       LogConfig       `yaml:"log"`
+	Provider  ProviderConfig  `json:"provider"`
+	Routing   RoutingConfig   `json:"routing"`
+	Channels  ChannelsConfig  `json:"channels"`
+	Security  SecurityConfig  `json:"security"`
+	Skills    SkillsConfig    `json:"skills"`
+	Scheduler SchedulerConfig `json:"scheduler"`
+	Memory    MemoryConfig    `json:"memory"`
+	Agent     AgentConfig     `json:"agent"`
+	Log       LogConfig       `json:"log"`
 }
 
 type ProviderConfig struct {
-	ClaudeCLI    *ClaudeCLIConfig    `yaml:"claude_cli"`
-	Anthropic    *AnthropicConfig    `yaml:"anthropic"`
-	Gemini       *GeminiConfig       `yaml:"gemini"`
-	ZAI          *ZAIConfig          `yaml:"zai"`
-	OpenAICompat *OpenAICompatConfig `yaml:"openai_compat"`
+	ClaudeCLI    *ClaudeCLIConfig    `json:"claude_cli,omitempty"`
+	Anthropic    *AnthropicConfig    `json:"anthropic,omitempty"`
+	Gemini       *GeminiConfig       `json:"gemini,omitempty"`
+	ZAI          *ZAIConfig          `json:"zai,omitempty"`
+	OpenAICompat *OpenAICompatConfig `json:"openai_compat,omitempty"`
 }
 
 type ClaudeCLIConfig struct {
-	Enabled bool     `yaml:"enabled"`
-	Binary  string   `yaml:"binary"`
-	Timeout string   `yaml:"timeout"`
-	Flags   []string `yaml:"flags"`
+	Enabled bool     `json:"enabled"`
+	Binary  string   `json:"binary"`
+	Timeout string   `json:"timeout"`
+	Flags   []string `json:"flags"`
 }
 
 type AnthropicConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	APIKey       string `yaml:"api_key"`
-	DefaultModel string `yaml:"default_model"`
-	FastModel    string `yaml:"fast_model"`
+	Enabled      bool   `json:"enabled"`
+	APIKey       string `json:"api_key"`
+	DefaultModel string `json:"default_model"`
+	FastModel    string `json:"fast_model"`
 }
 
 type GeminiConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	APIKey       string `yaml:"api_key"`
-	DefaultModel string `yaml:"default_model"`
-	AudioModel   string `yaml:"audio_model"` // native audio (transcription/live)
-	TTSModel     string `yaml:"tts_model"`   // text-to-speech
+	Enabled      bool   `json:"enabled"`
+	APIKey       string `json:"api_key"`
+	DefaultModel string `json:"default_model"`
+	AudioModel   string `json:"audio_model"` // native audio (transcription/live)
+	TTSModel     string `json:"tts_model"`   // text-to-speech
 }
 
 type ZAIConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	APIKey       string `yaml:"api_key"`
-	DefaultModel string `yaml:"default_model"`
+	Enabled      bool   `json:"enabled"`
+	APIKey       string `json:"api_key"`
+	DefaultModel string `json:"default_model"`
 }
 
 type OpenAICompatConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	BaseURL      string `yaml:"base_url"`
-	APIKey       string `yaml:"api_key"`
-	DefaultModel string `yaml:"default_model"`
+	Enabled      bool   `json:"enabled"`
+	BaseURL      string `json:"base_url"`
+	APIKey       string `json:"api_key"`
+	DefaultModel string `json:"default_model"`
 }
 
 type RoutingConfig struct {
-	Primary    string `yaml:"primary"`
-	Fast       string `yaml:"fast"`
-	Multimodal string `yaml:"multimodal"`
-	Fallback   string `yaml:"fallback"`
+	Primary    string `json:"primary,omitempty"`
+	Fast       string `json:"fast,omitempty"`
+	Multimodal string `json:"multimodal,omitempty"`
+	Fallback   string `json:"fallback,omitempty"`
 }
 
 type ChannelsConfig struct {
-	Telegram *TelegramConfig `yaml:"telegram"`
+	Telegram *TelegramConfig `json:"telegram,omitempty"`
 }
 
 type TelegramConfig struct {
-	Enabled      bool    `yaml:"enabled"`
-	BotToken     string  `yaml:"bot_token"`
-	AllowedUsers []int64 `yaml:"allowed_users"`
+	Enabled      bool    `json:"enabled"`
+	BotToken     string  `json:"bot_token"`
+	AllowedUsers []int64 `json:"allowed_users"`
 }
 
 type SecurityConfig struct {
-	ApprovalTimeout string   `yaml:"approval_timeout"`
-	DenyPatterns    []string `yaml:"deny_patterns"`
-	AllowedPaths    []string `yaml:"allowed_paths"`
+	ApprovalTimeout string   `json:"approval_timeout,omitempty"`
+	DenyPatterns    []string `json:"deny_patterns,omitempty"`
+	AllowedPaths    []string `json:"allowed_paths,omitempty"`
 }
 
 type SkillsConfig struct {
-	BasePackages []string `yaml:"base_packages"`
-	WarmPoolSize int      `yaml:"warm_pool_size"`
-	MaxRetries   int      `yaml:"max_retries"`
+	BasePackages []string `json:"base_packages,omitempty"`
+	WarmPoolSize int      `json:"warm_pool_size,omitempty"`
+	MaxRetries   int      `json:"max_retries,omitempty"`
 }
 
 type SchedulerConfig struct {
-	MaxConcurrent          int `yaml:"max_concurrent"`
-	AutoPauseAfterFailures int `yaml:"auto_pause_after_failures"`
+	MaxConcurrent          int `json:"max_concurrent,omitempty"`
+	AutoPauseAfterFailures int `json:"auto_pause_after_failures,omitempty"`
 }
 
 type MemoryConfig struct {
-	AutoSave              bool `yaml:"auto_save"`
-	CompactionThreshold   int  `yaml:"compaction_threshold"`
+	AutoSave            bool `json:"auto_save,omitempty"`
+	CompactionThreshold int  `json:"compaction_threshold,omitempty"`
 }
 
 type AgentConfig struct {
-	SystemPrompt       string `yaml:"system_prompt"`
-	MaxHistoryMessages int    `yaml:"max_history_messages"` // max messages to load into context (default: 20)
-	MaxIterations      int    `yaml:"max_iterations"`       // max tool iterations per turn (default: 20)
-	MaxOutputLen       int    `yaml:"max_output_len"`       // max shell output chars (default: 10000)
-	ShellTimeout       string `yaml:"shell_timeout"`        // default shell_exec timeout (default: "30s")
-	ProviderTimeout    string `yaml:"provider_timeout"`     // HTTP timeout for providers (default: "120s")
-	MaxTokens          int    `yaml:"max_tokens"`           // max tokens for LLM response (default: 4096)
-	DailyTokenLimit    int    `yaml:"daily_token_limit"`    // daily token limit, 0=unlimited
-	ToolTimeout        string `yaml:"tool_timeout"`         // default tool execution timeout (default: "60s")
-	HeartbeatInterval  string `yaml:"heartbeat_interval"`   // heartbeat interval (default: "30m", empty to disable)
+	SystemPrompt       string `json:"system_prompt,omitempty"`
+	MaxHistoryMessages int    `json:"max_history_messages,omitempty"` // max messages to load into context (default: 20)
+	MaxIterations      int    `json:"max_iterations,omitempty"`       // max tool iterations per turn (default: 20)
+	MaxOutputLen       int    `json:"max_output_len,omitempty"`       // max shell output chars (default: 10000)
+	ShellTimeout       string `json:"shell_timeout,omitempty"`        // default shell_exec timeout (default: "30s")
+	ProviderTimeout    string `json:"provider_timeout,omitempty"`     // HTTP timeout for providers (default: "120s")
+	MaxTokens          int    `json:"max_tokens,omitempty"`           // max tokens for LLM response (default: 4096)
+	DailyTokenLimit    int    `json:"daily_token_limit,omitempty"`    // daily token limit, 0=unlimited
+	ToolTimeout        string `json:"tool_timeout,omitempty"`         // default tool execution timeout (default: "60s")
+	HeartbeatInterval  string `json:"heartbeat_interval,omitempty"`   // heartbeat interval (default: "30m", empty to disable)
 }
 
 type LogConfig struct {
-	Level string `yaml:"level"`
-	File  string `yaml:"file"`
+	Level string `json:"level,omitempty"`
+	File  string `json:"file,omitempty"`
 }
 
 var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
@@ -151,7 +150,7 @@ func AeonHome() string {
 }
 
 func DefaultConfigPath() string {
-	return filepath.Join(AeonHome(), "config.yaml")
+	return filepath.Join(AeonHome(), "config.json")
 }
 
 func Load(path string) (*Config, error) {
@@ -162,7 +161,7 @@ func Load(path string) (*Config, error) {
 	data = expandEnvInBytes(data)
 
 	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
