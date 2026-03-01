@@ -28,10 +28,10 @@ This document covers Aeon's architecture, internals, security model, and how it 
 ### High-Level Flow
 
 ```
-You (Telegram / CLI)
+You (CLI / Telegram / Discord / Slack / Email / WhatsApp / Webhook / WebSocket)
         |
         v
-   Message Bus ──────────── Channels (telegram, cli)
+   Message Bus ──────────── Channels (8 supported)
         |
         v
    Agent Loop ───────────── History + Memory (SQLite FTS5)
@@ -57,9 +57,15 @@ You (Telegram / CLI)
 │         │                 │                           │
 │  ┌──────┴───────┐  ┌──────┴───────┐  ┌─────────────┐ │
 │  │  Channels    │  │ Tool Registry│──│  Security   │ │
-│  │  - Telegram  │  │  - DNA tools │  │  Policy     │ │
-│  │  - CLI       │  │  - Evolved   │  └─────────────┘ │
-│  └──────────────┘  └──────┬───────┘                   │
+│  │  - CLI       │  │  - DNA tools │  │  Policy     │ │
+│  │  - Telegram  │  │  - Evolved   │  └─────────────┘ │
+│  │  - Webhook   │  └──────┬───────┘                   │
+│  │  - WebSocket │                                     │
+│  │  - Discord   │                                     │
+│  │  - Slack     │                                     │
+│  │  - Email     │                                     │
+│  │  - WhatsApp  │                                     │
+│  └──────────────┘                                     │
 │                           │          ┌─────────────┐  │
 │  ┌──────────────┐  ┌──────┴───────┐  │  Scheduler  │  │
 │  │  Memory      │  │  Skill Mgr   │  │  (Cron)     │  │
@@ -77,7 +83,7 @@ All communication flows as `InboundMessage -> AgentLoop -> OutboundMessage`. Cha
 
 The core request-response cycle (`internal/agent/loop.go`):
 
-1. User message arrives on bus (Telegram or CLI)
+1. User message arrives on bus (any channel)
 2. Slash commands handled separately (`/status`, `/model`, `/new`, `/cost`, `/help`, `/skills`, `/stop`)
 3. For normal messages:
    - Add to in-memory history
@@ -362,8 +368,14 @@ internal/
     bus.go                 # message bus — channels produce, agent loop consumes
 
   channels/
-    telegram.go            # Telegram bot (long-polling, typing indicator, voice)
     cli.go                 # local terminal interface
+    telegram.go            # Telegram bot (long-polling, typing indicator, voice)
+    webhook.go             # HTTP API (POST /message, sync response, Bearer auth)
+    websocket.go           # WebSocket (persistent connections, gorilla/websocket)
+    discord.go             # Discord bot (discordgo, mention-only mode)
+    slack.go               # Slack bot (Socket Mode, threads, app mentions)
+    email.go               # Email (IMAP poll + SMTP reply)
+    whatsapp.go            # WhatsApp Cloud API (Meta webhook)
     channel.go             # channel interface
     transcribe.go          # Gemini audio transcription
 
@@ -439,7 +451,7 @@ A regex-based scrubber strips API keys and tokens from tool output before it ent
 
 Missing dependencies disable features, not the system:
 - No Python → skills disabled, DNA tools still work
-- No Telegram token → CLI only
+- No channel tokens → CLI only
 - No ffmpeg → voice transcription unavailable
 - Single provider fails → fallback provider takes over
 
@@ -488,7 +500,7 @@ Aeon compared against other agentic frameworks from the same research lineage:
 </tr>
 <tr>
 <td><strong>Dependencies</strong></td>
-<td><strong>2 direct</strong></td>
+<td><strong>7 direct</strong></td>
 <td>~45</td>
 <td>~152</td>
 <td>~20</td>
@@ -510,7 +522,7 @@ Aeon compared against other agentic frameworks from the same research lineage:
 </tr>
 <tr>
 <td><strong>Channels</strong></td>
-<td><strong>2 (Telegram, CLI)</strong></td>
+<td><strong>8 (CLI, Telegram, Webhook, WebSocket, Discord, Slack, Email, WhatsApp)</strong></td>
 <td>2</td>
 <td>2</td>
 <td>15+</td>
@@ -603,7 +615,7 @@ Aeon compared against other agentic frameworks from the same research lineage:
 
 **Key differentiators:**
 - Aeon and IronClaw are the only self-evolving agents (write their own tools at runtime)
-- Aeon has the fewest dependencies (2 direct: `yaml.v3` and `modernc.org/sqlite`)
+- Aeon has minimal dependencies (7 direct: `modernc.org/sqlite`, `gorilla/websocket`, `bwmarrin/discordgo`, `slack-go/slack`, `emersion/go-imap`, `emersion/go-message`, `yaml.v3`)
 - Aeon produces a single static binary — no runtime, no VM, no interpreter
 - Full offline support via Ollama (local models)
 

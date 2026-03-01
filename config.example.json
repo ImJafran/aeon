@@ -24,6 +24,44 @@
       "enabled": true,
       "bot_token": "your-telegram-bot-token",
       "allowed_users": [0]
+    },
+    "webhook": {
+      "enabled": false,
+      "listen_addr": ":8080",
+      "auth_token": "your-secret-token"
+    },
+    "websocket": {
+      "enabled": false,
+      "listen_addr": ":8081",
+      "auth_token": "your-secret-token"
+    },
+    "discord": {
+      "enabled": false,
+      "bot_token": "your-discord-bot-token",
+      "allowed_users": [],
+      "mention_only": true
+    },
+    "slack": {
+      "enabled": false,
+      "bot_token": "xoxb-your-slack-bot-token",
+      "app_token": "xapp-your-slack-app-token",
+      "allowed_users": []
+    },
+    "email": {
+      "enabled": false,
+      "imap_server": "imap.gmail.com:993",
+      "smtp_server": "smtp.gmail.com:587",
+      "username": "you@gmail.com",
+      "password": "your-app-password",
+      "poll_interval": "60s",
+      "allowed_from": []
+    },
+    "whatsapp": {
+      "enabled": false,
+      "phone_number_id": "your-phone-number-id",
+      "access_token": "your-whatsapp-access-token",
+      "verify_token": "aeon-verify",
+      "listen_addr": ":8443"
     }
   },
   "routing": {

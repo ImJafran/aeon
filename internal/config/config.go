@@ -73,13 +73,63 @@ type RoutingConfig struct {
 }
 
 type ChannelsConfig struct {
-	Telegram *TelegramConfig `json:"telegram,omitempty"`
+	Telegram  *TelegramConfig  `json:"telegram,omitempty"`
+	Webhook   *WebhookConfig   `json:"webhook,omitempty"`
+	WebSocket *WebSocketConfig `json:"websocket,omitempty"`
+	Discord   *DiscordConfig   `json:"discord,omitempty"`
+	Slack     *SlackConfig     `json:"slack,omitempty"`
+	Email     *EmailConfig     `json:"email,omitempty"`
+	WhatsApp  *WhatsAppConfig  `json:"whatsapp,omitempty"`
 }
 
 type TelegramConfig struct {
 	Enabled      bool    `json:"enabled"`
 	BotToken     string  `json:"bot_token"`
 	AllowedUsers []int64 `json:"allowed_users"`
+}
+
+type WebhookConfig struct {
+	Enabled    bool   `json:"enabled"`
+	ListenAddr string `json:"listen_addr"`
+	AuthToken  string `json:"auth_token,omitempty"`
+}
+
+type WebSocketConfig struct {
+	Enabled    bool   `json:"enabled"`
+	ListenAddr string `json:"listen_addr"`
+	AuthToken  string `json:"auth_token,omitempty"`
+}
+
+type DiscordConfig struct {
+	Enabled      bool     `json:"enabled"`
+	BotToken     string   `json:"bot_token"`
+	AllowedUsers []string `json:"allowed_users,omitempty"`
+	MentionOnly  bool     `json:"mention_only,omitempty"`
+}
+
+type SlackConfig struct {
+	Enabled      bool     `json:"enabled"`
+	BotToken     string   `json:"bot_token"`
+	AppToken     string   `json:"app_token"`
+	AllowedUsers []string `json:"allowed_users,omitempty"`
+}
+
+type EmailConfig struct {
+	Enabled      bool     `json:"enabled"`
+	IMAPServer   string   `json:"imap_server"`
+	SMTPServer   string   `json:"smtp_server"`
+	Username     string   `json:"username"`
+	Password     string   `json:"password"`
+	PollInterval string   `json:"poll_interval,omitempty"`
+	AllowedFrom  []string `json:"allowed_from,omitempty"`
+}
+
+type WhatsAppConfig struct {
+	Enabled       bool   `json:"enabled"`
+	PhoneNumberID string `json:"phone_number_id"`
+	AccessToken   string `json:"access_token"`
+	VerifyToken   string `json:"verify_token"`
+	ListenAddr    string `json:"listen_addr,omitempty"`
 }
 
 type SecurityConfig struct {

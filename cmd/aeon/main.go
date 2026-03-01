@@ -14,13 +14,14 @@ import (
 	"time"
 
 	"github.com/ImJafran/aeon/internal/bootstrap"
+	"github.com/ImJafran/aeon/internal/bus"
 	"github.com/ImJafran/aeon/internal/channels"
 	"github.com/ImJafran/aeon/internal/config"
 )
 
 const shutdownTimeout = 10 * time.Second
 
-var version = "0.0.1-beta"
+var version = "0.0.2-beta"
 
 func main() {
 	if len(os.Args) > 1 {
@@ -120,6 +121,21 @@ func runInit() {
 		fmt.Println("  ✗ No providers detected.")
 		fmt.Println("    Set API key env vars and re-run 'aeon init', or edit ~/.aeon/config.json")
 		fmt.Println("    See config.example.json for the full template.")
+	}
+
+	// Detect channels
+	fmt.Println("\n  Channels:")
+	if info.HasTelegram {
+		fmt.Println("  ✓ TELEGRAM_BOT_TOKEN set")
+	}
+	if info.HasDiscord {
+		fmt.Println("  ✓ DISCORD_BOT_TOKEN set")
+	}
+	if info.HasSlack {
+		fmt.Println("  ✓ SLACK_BOT_TOKEN + SLACK_APP_TOKEN set")
+	}
+	if info.HasWhatsApp {
+		fmt.Println("  ✓ WHATSAPP_ACCESS_TOKEN set")
 	}
 
 	// Step 4: Setup workspace
@@ -222,7 +238,6 @@ func runInteractive() {
 	fmt.Printf("   Home: %s\n\n", home)
 
 	// Start CLI channel (always active in interactive mode)
-	type stoppable interface{ Stop() }
 	var activeChannels []stoppable
 
 	cli := channels.NewCLI()
@@ -245,6 +260,8 @@ func runInteractive() {
 			activeChannels = append(activeChannels, tg)
 		}
 	}
+
+	startOptionalChannels(cfg, ctx, deps.Bus, logger, &activeChannels)
 
 	// Run agent loop (blocks until context cancelled)
 	deps.Loop.Run(ctx)
@@ -310,7 +327,6 @@ func runServe() {
 	deps.StartScheduler(ctx)
 
 	// Start all enabled channels
-	type stoppable interface{ Stop() }
 	var activeChannels []stoppable
 	var channelNames []string
 
@@ -326,6 +342,8 @@ func runServe() {
 			channelNames = append(channelNames, "telegram")
 		}
 	}
+
+	startOptionalChannelsWithNames(cfg, ctx, deps.Bus, logger, &activeChannels, &channelNames)
 
 	if len(activeChannels) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: no channels configured. Add at least one channel to config.json.\n")
@@ -428,6 +446,83 @@ func printUsage() {
 	fmt.Println("  aeon uninstall    Remove Aeon completely (binary, data, service)")
 	fmt.Println("  aeon version      Show version")
 	fmt.Println("  aeon help         Show this help")
+}
+
+// startOptionalChannels starts all non-Telegram optional channels.
+func startOptionalChannels(cfg *config.Config, ctx context.Context, msgBus *bus.MessageBus, logger *slog.Logger, activeChannels *[]stoppable) {
+	var names []string
+	startOptionalChannelsWithNames(cfg, ctx, msgBus, logger, activeChannels, &names)
+}
+
+// stoppable is an interface for channels that can be stopped.
+type stoppable interface{ Stop() }
+
+func startOptionalChannelsWithNames(cfg *config.Config, ctx context.Context, msgBus *bus.MessageBus, logger *slog.Logger, activeChannels *[]stoppable, channelNames *[]string) {
+	if c := cfg.Channels.Webhook; c != nil && c.Enabled {
+		ch := channels.NewWebhook(c.ListenAddr, c.AuthToken, logger)
+		if err := ch.Start(ctx, msgBus); err != nil {
+			logger.Error("failed to start webhook channel", "error", err)
+		} else {
+			*activeChannels = append(*activeChannels, ch)
+			*channelNames = append(*channelNames, "webhook")
+		}
+	}
+
+	if c := cfg.Channels.WebSocket; c != nil && c.Enabled {
+		ch := channels.NewWebSocket(c.ListenAddr, c.AuthToken, logger)
+		if err := ch.Start(ctx, msgBus); err != nil {
+			logger.Error("failed to start websocket channel", "error", err)
+		} else {
+			*activeChannels = append(*activeChannels, ch)
+			*channelNames = append(*channelNames, "websocket")
+		}
+	}
+
+	if c := cfg.Channels.Discord; c != nil && c.Enabled && c.BotToken != "" {
+		ch := channels.NewDiscord(c.BotToken, c.AllowedUsers, c.MentionOnly, logger)
+		if err := ch.Start(ctx, msgBus); err != nil {
+			logger.Error("failed to start discord channel", "error", err)
+		} else {
+			*activeChannels = append(*activeChannels, ch)
+			*channelNames = append(*channelNames, "discord")
+		}
+	}
+
+	if c := cfg.Channels.Slack; c != nil && c.Enabled && c.BotToken != "" && c.AppToken != "" {
+		ch := channels.NewSlack(c.BotToken, c.AppToken, c.AllowedUsers, logger)
+		if err := ch.Start(ctx, msgBus); err != nil {
+			logger.Error("failed to start slack channel", "error", err)
+		} else {
+			*activeChannels = append(*activeChannels, ch)
+			*channelNames = append(*channelNames, "slack")
+		}
+	}
+
+	if c := cfg.Channels.Email; c != nil && c.Enabled && c.IMAPServer != "" && c.SMTPServer != "" {
+		pollInterval := 60 * time.Second
+		if c.PollInterval != "" {
+			if d, err := time.ParseDuration(c.PollInterval); err == nil {
+				pollInterval = d
+			}
+		}
+		ch := channels.NewEmail(c.IMAPServer, c.SMTPServer, c.Username, c.Password, pollInterval, c.AllowedFrom, logger)
+		if err := ch.Start(ctx, msgBus); err != nil {
+			logger.Error("failed to start email channel", "error", err)
+		} else {
+			*activeChannels = append(*activeChannels, ch)
+			*channelNames = append(*channelNames, "email")
+		}
+	}
+
+	if c := cfg.Channels.WhatsApp; c != nil && c.Enabled && c.PhoneNumberID != "" && c.AccessToken != "" {
+		ch := channels.NewWhatsApp(c.PhoneNumberID, c.AccessToken, c.VerifyToken, c.ListenAddr, logger)
+		if err := ch.Start(ctx, msgBus); err != nil {
+			logger.Error("failed to start whatsapp channel", "error", err)
+		} else {
+			*activeChannels = append(*activeChannels, ch)
+			*channelNames = append(*channelNames, "whatsapp")
+		}
+	}
 }
 
 func parseLogLevel(level string) slog.Level {

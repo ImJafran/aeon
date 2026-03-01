@@ -23,6 +23,9 @@ type SystemInfo struct {
 	HasGeminiKey    bool
 	HasZAIKey       bool
 	HasTelegram     bool
+	HasDiscord      bool
+	HasSlack        bool
+	HasWhatsApp     bool
 }
 
 func DetectSystem() *SystemInfo {
@@ -57,6 +60,15 @@ func DetectSystem() *SystemInfo {
 	}
 	if os.Getenv("TELEGRAM_BOT_TOKEN") != "" {
 		info.HasTelegram = true
+	}
+	if os.Getenv("DISCORD_BOT_TOKEN") != "" {
+		info.HasDiscord = true
+	}
+	if os.Getenv("SLACK_BOT_TOKEN") != "" && os.Getenv("SLACK_APP_TOKEN") != "" {
+		info.HasSlack = true
+	}
+	if os.Getenv("WHATSAPP_ACCESS_TOKEN") != "" {
+		info.HasWhatsApp = true
 	}
 
 	return info
@@ -275,6 +287,30 @@ func GenerateDefaultConfig(info *SystemInfo) string {
 			}
 		}
 		cfg.Channels.Telegram = tg
+	}
+
+	if info.HasDiscord {
+		cfg.Channels.Discord = &config.DiscordConfig{
+			Enabled:  true,
+			BotToken: "${DISCORD_BOT_TOKEN}",
+		}
+	}
+
+	if info.HasSlack {
+		cfg.Channels.Slack = &config.SlackConfig{
+			Enabled:  true,
+			BotToken: "${SLACK_BOT_TOKEN}",
+			AppToken: "${SLACK_APP_TOKEN}",
+		}
+	}
+
+	if info.HasWhatsApp {
+		cfg.Channels.WhatsApp = &config.WhatsAppConfig{
+			Enabled:     true,
+			AccessToken: "${WHATSAPP_ACCESS_TOKEN}",
+			VerifyToken: "aeon-verify",
+			ListenAddr:  ":8443",
+		}
 	}
 
 	// Routing
